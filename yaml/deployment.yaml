@@ -69,7 +69,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: doc-controller
 rules:
-  - apiGroups: ["kube.rs"]
+  - apiGroups: ["kuberest.solidite.fr"]
     resources: ["documents", "documents/status", "documents/finalizers"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: ["events.k8s.io"]

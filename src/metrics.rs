@@ -1,4 +1,4 @@
-use crate::{Document, Error};
+use crate::{RestEndPoint, Error};
 use kube::ResourceExt;
 use prometheus::{histogram_opts, opts, HistogramVec, IntCounter, IntCounterVec, Registry};
 use tokio::time::Instant;
@@ -48,7 +48,7 @@ impl Metrics {
         Ok(self)
     }
 
-    pub fn reconcile_failure(&self, doc: &Document, e: &Error) {
+    pub fn reconcile_failure(&self, doc: &RestEndPoint, e: &Error) {
         self.failures
             .with_label_values(&[doc.name_any().as_ref(), e.metric_label().as_ref()])
             .inc()

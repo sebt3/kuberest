@@ -1,4 +1,4 @@
-apiVersion: kube.rs/v1
+apiVersion: kuberest.solidite.fr/v1
 kind: Document
 metadata:
   name: samuel

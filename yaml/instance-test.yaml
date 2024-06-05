@@ -1,0 +1,15 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: test
+spec:
+  inputs:
+  - name: token
+    secretRef:
+      name: token
+  client:
+    baseurl: "https://gitlab.com/api/v4"
+    headers:
+      Authorization: "Bearer {{ base64_decode input.token.data.gitlab_token }}"
+      Content-Type: "application/json; charset=utf-8"
+      Accept: application/json

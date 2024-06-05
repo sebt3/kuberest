@@ -2,6 +2,7 @@
 use actix_web::{get, middleware, web::Data, App, HttpRequest, HttpResponse, HttpServer, Responder};
 pub use controller::{self, telemetry, State};
 use prometheus::{Encoder, TextEncoder};
+use std::env;
 
 #[get("/metrics")]
 async fn metrics(c: Data<State>, _req: HttpRequest) -> impl Responder {
@@ -23,9 +24,11 @@ async fn index(c: Data<State>, _req: HttpRequest) -> impl Responder {
     HttpResponse::Ok().json(&d)
 }
 
+static PORT_VAR_NAME: &str = "PORT";
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     telemetry::init().await;
+    let port = if env::var(PORT_VAR_NAME).is_ok() {env::var(PORT_VAR_NAME).unwrap()} else {"8080".to_string()};
 
     // Initiatilize Kubernetes controller state
     let state = State::default();
@@ -40,8 +43,7 @@ async fn main() -> anyhow::Result<()> {
             .service(health)
             .service(metrics)
     })
-    .bind("0.0.0.0:8080")?
-    .shutdown_timeout(5);
+    .bind(format!("0.0.0.0:{port}"))?.shutdown_timeout(5);
 
     // Both runtimes implements graceful shutdown, so poll until both are done
     tokio::join!(controller, server.run()).1?;

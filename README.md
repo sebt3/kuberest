@@ -112,4 +112,4 @@ The metrics will be scraped by prometheus if you setup a`ServiceMonitor` for it.
 ### Events
 The example `reconciler` only checks the `.spec.hidden` bool. If it does, it updates the `.status` object to reflect whether or not the instance `is_hidden`. It also sends a Kubernetes event associated with the controller. It is visible at the bottom of `kubectl describe doc samuel`.
 
-To extend this controller for a real-world setting. Consider looking at the [kube.rs controller guide](https://kube.rs/controllers/intro/).
+To extend this controller for a real-world setting. Consider looking at the [kuberest.solidite.fr controller guide](https://kuberest.solidite.fr/controllers/intro/).

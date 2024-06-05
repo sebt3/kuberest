@@ -1,53 +1,395 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: documents.kube.rs
+  name: restendpoints.kuberest.solidite.fr
 spec:
-  group: kube.rs
+  group: kuberest.solidite.fr
   names:
     categories: []
-    kind: Document
-    plural: documents
+    kind: RestEndPoint
+    plural: restendpoints
     shortNames:
-    - doc
-    singular: document
+    - rep
+    singular: restendpoint
   scope: Namespaced
   versions:
   - additionalPrinterColumns: []
     name: v1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for DocumentSpec via `CustomResource`
+        description: Auto-generated derived type for RestEndPointSpec via `CustomResource`
         properties:
           spec:
-            description: |-
-              Generate the Kubernetes wrapper struct `Document` from our Spec and Status struct
-
-              This provides a hook for generating the CRD yaml (in crdgen.rs)
+            description: Describe the specification of a RestEndPoint
             properties:
-              content:
-                type: string
-              hide:
-                type: boolean
-              title:
-                type: string
+              checkFrequency:
+                description: 'checkFrequency define the pooling interval (in seconds, default: 300)'
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
+              client:
+                description: Define the how the client should connect to the API endpoint(s)
+                properties:
+                  baseurl:
+                    description: The baseurl the client will use. All path will use this as a prefix
+                    type: string
+                  createMethod:
+                    description: 'Method to use when creating an object (default: Get)'
+                    enum:
+                    - Post
+                    nullable: true
+                    type: string
+                  deleteMethod:
+                    description: 'Method to use when deleting an object (default: Delete)'
+                    enum:
+                    - Delete
+                    nullable: true
+                    type: string
+                  headers:
+                    additionalProperties:
+                      type: string
+                    description: Headers to use on each requests to the endpoint
+                    nullable: true
+                    type: object
+                  keyName:
+                    description: 'keyName: the key of the object (default: id)'
+                    nullable: true
+                    type: string
+                  readMethod:
+                    description: 'Method to use when reading an object (default: Post)'
+                    enum:
+                    - Get
+                    nullable: true
+                    type: string
+                  teardown:
+                    description: 'Delete the Objects on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)'
+                    nullable: true
+                    type: boolean
+                  updateMethod:
+                    description: 'Method to use when updating an object (default: Put)'
+                    enum:
+                    - Patch
+                    - Put
+                    - Post
+                    nullable: true
+                    type: string
+                required:
+                - baseurl
+                type: object
+              inputs:
+                description: List input source for Handlebars templates
+                items:
+                  description: inputItem describe a data input for handlebars templates
+                  properties:
+                    configMapRef:
+                      description: The ConfigMap to select from
+                      nullable: true
+                      properties:
+                        name:
+                          description: Name of the ConfigMap
+                          type: string
+                        namespace:
+                          description: 'Namespace of the ConfigMap, only used if the cross-namespace option is enabled (default: current object namespace)'
+                          nullable: true
+                          type: string
+                        optional:
+                          description: 'Is the ConfigMap requiered for processing ? (default: false)'
+                          nullable: true
+                          type: boolean
+                      required:
+                      - name
+                      type: object
+                    name:
+                      description: name of the input (used for handlebars templates)
+                      type: string
+                    secretRef:
+                      description: The Secret to select from
+                      nullable: true
+                      properties:
+                        name:
+                          description: Name of the Secret
+                          type: string
+                        namespace:
+                          description: 'Namespace of the Secret, only used if the cross-namespace option is enabled (default: current object namespace)'
+                          nullable: true
+                          type: string
+                        optional:
+                          description: 'Is the Secret optional for processing ? (default: false)'
+                          nullable: true
+                          type: boolean
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - name
+                  type: object
+                nullable: true
+                type: array
+              outputs:
+                description: Objects (Secret or ConfigMap) to create at the end of the process
+                items:
+                  description: outputItem describe an object that will be created/updated after the path objects are all handled
+                  properties:
+                    data:
+                      additionalProperties:
+                        type: string
+                      description: Data of the Output (will be base64-encoded for secret Secrets)
+                      type: object
+                    kind:
+                      description: Either ConfigMap or Secret
+                      enum:
+                      - Secret
+                      - ConfigMap
+                      type: string
+                    metadata:
+                      description: 'The metadata of the Object (requiered: name)'
+                      properties:
+                        annotations:
+                          additionalProperties:
+                            type: string
+                          description: annotations of the objects
+                          nullable: true
+                          type: object
+                        labels:
+                          additionalProperties:
+                            type: string
+                          description: labels of the objects
+                          nullable: true
+                          type: object
+                        name:
+                          description: name of the created object
+                          type: string
+                        namespace:
+                          description: namespace of the created object
+                          nullable: true
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    teardown:
+                      description: 'Delete the Secret on RestEndPoint deletion (default: true)'
+                      nullable: true
+                      type: boolean
+                  required:
+                  - data
+                  - kind
+                  - metadata
+                  type: object
+                nullable: true
+                type: array
+              reads:
+                description: Allow to read some pre-existing objects
+                items:
+                  description: ReadGroup describe a rest endpoint within the client sub-paths,
+                  properties:
+                    items:
+                      description: The list of object mapping
+                      items:
+                        description: readGroupItem describe an object to read with the client
+                        properties:
+                          key:
+                            description: configuration of this object
+                            type: string
+                          name:
+                            description: name of the item (used for handlebars templates)
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      type: array
+                    name:
+                      description: name of the write (used for handlebars templates)
+                      type: string
+                    path:
+                      description: path appended to the client's baseurl for this group of objects
+                      type: string
+                    read_method:
+                      description: 'Method to use when reading an object (default: Post)'
+                      enum:
+                      - Get
+                      nullable: true
+                      type: string
+                  required:
+                  - items
+                  - name
+                  - path
+                  type: object
+                nullable: true
+                type: array
+              writes:
+                description: Sub-paths to the client. Allow to describe the objects to create on the end-point
+                items:
+                  description: writeGroup describe a rest endpoint within the client sub-paths,
+                  properties:
+                    create_method:
+                      description: 'Method to use when creating an object (default: Get)'
+                      enum:
+                      - Post
+                      nullable: true
+                      type: string
+                    delete_method:
+                      description: 'Method to use when deleting an object (default: Delete)'
+                      enum:
+                      - Delete
+                      nullable: true
+                      type: string
+                    items:
+                      description: The list of object mapping
+                      items:
+                        description: writeGroupItem describe an object to maintain within
+                        properties:
+                          inputs:
+                            additionalProperties: true
+                            description: configuration of this object
+                            type: object
+                          name:
+                            description: 'name of the item (used for handlebars templates: write.<group>.<name>)'
+                            type: string
+                          teardown:
+                            description: 'Delete the Object on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)'
+                            nullable: true
+                            type: boolean
+                        required:
+                        - inputs
+                        - name
+                        type: object
+                      type: array
+                    key_name:
+                      description: 'keyName: the key of the object (default: id)'
+                      nullable: true
+                      type: string
+                    name:
+                      description: 'name of the write (used for handlebars templates: write.<name>)'
+                      type: string
+                    path:
+                      description: path appended to the client's baseurl for this group of objects
+                      type: string
+                    read_method:
+                      description: 'Method to use when reading an object (default: Post)'
+                      enum:
+                      - Get
+                      nullable: true
+                      type: string
+                    teardown:
+                      description: 'Delete the Objects on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)'
+                      nullable: true
+                      type: boolean
+                    update_method:
+                      description: 'Method to use when updating an object (default: Patch)'
+                      enum:
+                      - Patch
+                      - Put
+                      - Post
+                      nullable: true
+                      type: string
+                  required:
+                  - items
+                  - name
+                  - path
+                  type: object
+                nullable: true
+                type: array
             required:
-            - content
-            - hide
-            - title
+            - client
             type: object
           status:
-            description: The status object of `Document`
+            description: The status object of `RestEndPoint`
             nullable: true
             properties:
-              hidden:
-                type: boolean
+              conditions:
+                items:
+                  description: ApplicationCondition contains details about an application condition, which is usually an error or warning
+                  properties:
+                    lastTransitionTime:
+                      description: LastTransitionTime is the time the condition was last observed
+                      format: date-time
+                      nullable: true
+                      type: string
+                    message:
+                      description: Message contains human-readable message indicating details about condition
+                      type: string
+                    status:
+                      description: Status ("True" or "False") describe if the condition is enbled
+                      enum:
+                      - 'True'
+                      - 'False'
+                      type: string
+                    type:
+                      description: Type is an application condition type
+                      enum:
+                      - Ready
+                      - InputMissing
+                      - InputFailed
+                      - TemplateFailed
+                      - ReadFailed
+                      - WriteFailed
+                      - WriteDeleteFailed
+                      - WriteAlreadyExist
+                      - OutputFailed
+                      - OutputDeleteFailed
+                      - OutputAlreadyExist
+                      type: string
+                  required:
+                  - message
+                  - status
+                  - type
+                  type: object
+                type: array
+              owned:
+                items:
+                  description: List all owned k8s objects
+                  properties:
+                    kind:
+                      description: Either ConfigMap or Secret
+                      enum:
+                      - Secret
+                      - ConfigMap
+                      type: string
+                    name:
+                      description: name of the owned object
+                      type: string
+                    namespace:
+                      description: namespace of the owned object
+                      type: string
+                    uid:
+                      description: uid of the owned object
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  - namespace
+                  - uid
+                  type: object
+                type: array
+              ownedTarget:
+                items:
+                  description: List all owned rest objects
+                  properties:
+                    deleteUrl:
+                      description: Object URL that will receive a delete on teardown
+                      type: string
+                    group:
+                      description: Object writeGroup
+                      type: string
+                    name:
+                      description: Object name within its writeGroup
+                      type: string
+                  required:
+                  - deleteUrl
+                  - group
+                  - name
+                  type: object
+                type: array
             required:
-            - hidden
+            - conditions
+            - owned
+            - ownedTarget
             type: object
         required:
         - spec
-        title: Document
+        title: RestEndPoint
         type: object
     served: true
     storage: true

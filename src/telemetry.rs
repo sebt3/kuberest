@@ -30,7 +30,7 @@ async fn init_tracer() -> opentelemetry::sdk::trace::Tracer {
         .with_trace_config(opentelemetry::sdk::trace::config().with_resource(
             opentelemetry::sdk::Resource::new(vec![opentelemetry::KeyValue::new(
                 "service.name",
-                "doc-controller",
+                "restpath-controller",
             )]),
         ))
         .install_batch(opentelemetry::runtime::Tokio)

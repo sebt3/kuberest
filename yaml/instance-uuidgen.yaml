@@ -1,0 +1,46 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: uuidgen
+spec:
+  checkFrequency: 10
+  inputs:
+  - name: output
+    secretRef:
+      optional: true
+      name: output
+  - name: uuid
+    handleBarsRender: "{{ uuid_new_v7 }}"
+  - name: other
+    handleBarsRender: "{{#if input.output.data.other }}{{ base64_decode input.output.data.other }}{{else}}{{ uuid_new_v7 }}{{/if}}"
+  - name: password
+    passwordGenerator: {}
+  - name: weak
+    passwordGenerator:
+      length: 8
+      weightSymbols: 0
+  templates:
+  - name: uuid
+    template: >-
+      {{#if input.output.data.uuid }}{{ base64_decode input.output.data.uuid }}{{else}}{{ input.uuid }}{{/if}}
+  - name: password
+    template: >-
+      {{#if input.output.data.password }}{{ base64_decode input.output.data.password }}{{else}}{{ input.password }}{{/if}}
+  - name: uuidgen
+    template: >-
+      {{ uuid_new_v7 }}
+  client:
+    baseurl: "http://localhost:8080"
+  outputs:
+  - kind: Secret
+    metadata:
+      name: output
+    data:
+      uuid: "{{> uuid }}"
+      same_uuid: "{{> uuid }}"
+      change_every_chech: "{{ input.uuid }}"
+      other: "{{ input.other }}"
+      same_other: "{{ input.other }}"
+      change_every_chech_too: "{{> uuidgen }}"
+      password: "{{> password }}"
+      weak: "{{ input.weak }}"

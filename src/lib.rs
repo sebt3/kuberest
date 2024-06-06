@@ -5,15 +5,35 @@ pub enum Error {
     #[error("SerializationError: {0}")]
     SerializationError(#[source] serde_json::Error),
 
-    #[error("Kube Error: {0}")]
+    #[error("K8s error: {0}")]
     KubeError(#[source] kube::Error),
 
-    #[error("Finalizer Error: {0}")]
+    #[error("Finalizer error: {0}")]
     // NB: awkward type because finalizer::Error embeds the reconciler error (which is this)
     // so boxing this error to break cycles
     FinalizerError(#[source] Box<kube::runtime::finalizer::Error<Error>>),
 
-    #[error("IllegalRestEndPoint")]
+    #[error("Registering template failed with error: {0}")]
+    HbsTemplateError(#[source] handlebars::TemplateError),
+    #[error("Renderer error: {0}")]
+    HbsRenderError(#[source] handlebars::RenderError),
+
+    #[error("Rhai script error: {0}")]
+    RhaiError(#[source] Box<rhai::EvalAltResult>),
+
+    #[error("Reqwest error: {0}")]
+    ReqwestError(#[source] reqwest::Error),
+
+    #[error("Json decoding error: {0}")]
+    JsonError(#[source] serde_json::Error),
+
+    #[error("{0} query failed: {1}")]
+    MethodFailed(String,String),
+
+    #[error("Unsupported method")]
+    UnsupportedMethod,
+
+    #[error("TeardownIncomplete")]
     TeardownIncomplete,
 
     #[error("IllegalRestEndPoint")]
@@ -41,6 +61,8 @@ pub use metrics::Metrics;
 mod k8shandlers;
 mod handlebarshandler;
 mod httphandler;
+mod passwordhandler;
+mod rhaihandler;
 
 #[cfg(test)] pub mod fixtures;
 
@@ -69,7 +91,7 @@ macro_rules! template {
 #[macro_export]
 macro_rules! update {
     ( $list:expr, $type_obj:expr, $output:expr, $my_ns:expr, $my_values:expr, $conditions:expr, $recorder:expr ) => {
-        match $list.update($output.metadata.name.as_str(), $my_values).await {
+        match $list.update(&$output.metadata, $my_values).await {
             Ok(x) => Some(x), Err(e) => {
                 $recorder.publish(Event {
                     type_: EventType::Warning,

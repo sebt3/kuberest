@@ -1,0 +1,30 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: list-config
+spec:
+  inputs:
+  - name: token
+    secretRef:
+      name: token
+  client:
+    baseurl: "https://gitlab.com/api/v4"
+    headers:
+      Authorization: "Bearer {{ base64_decode input.token.data.gitlab_token }}"
+  reads:
+  - name: gitlabUser
+    path: "/users/{{ base64_decode input.token.data.user_id }}"
+    items:
+    - name: projects
+      key: projects
+  outputs:
+  - kind: ConfigMap
+    metadata:
+      name: project-list
+    data:
+      config.yaml: |-
+        ---
+        names:
+        {{ json_to_str ( json_query "projects[*].name_with_namespace" read.gitlabUser )  format="yaml" }}
+        ids:
+        {{ json_to_str ( json_query "projects[*].id" read.gitlabUser )  format="yaml" }}

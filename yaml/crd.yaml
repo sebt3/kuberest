@@ -78,9 +78,9 @@ spec:
                 - baseurl
                 type: object
               inputs:
-                description: List input source for Handlebars templates
+                description: List input source for Handlebars renders
                 items:
-                  description: inputItem describe a data input for handlebars templates
+                  description: inputItem describe a data input for handlebars renders
                   properties:
                     configMapRef:
                       description: The ConfigMap to select from
@@ -100,9 +100,42 @@ spec:
                       required:
                       - name
                       type: object
-                    name:
-                      description: name of the input (used for handlebars templates)
+                    handleBarsRender:
+                      description: an handlebars template to be rendered
+                      nullable: true
                       type: string
+                    name:
+                      description: name of the input (used for handlebars renders)
+                      type: string
+                    passwordGenerator:
+                      description: A password generator
+                      nullable: true
+                      properties:
+                        length:
+                          description: 'length of the password (default: 32)'
+                          format: uint32
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
+                        weightAlphas:
+                          description: 'weight of alpha caracters (default: 60)'
+                          format: uint32
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
+                        weightNumbers:
+                          description: 'weight of numbers caracters (default: 20)'
+                          format: uint32
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
+                        weightSymbols:
+                          description: 'weight of symbols caracters (default: 20)'
+                          format: uint32
+                          minimum: 0.0
+                          nullable: true
+                          type: integer
+                      type: object
                     secretRef:
                       description: The Secret to select from
                       nullable: true
@@ -178,6 +211,14 @@ spec:
                   type: object
                 nullable: true
                 type: array
+              post:
+                description: A rhai post-script for final validation if any
+                nullable: true
+                type: string
+              pre:
+                description: A rhai pre-script to setup some complex variables
+                nullable: true
+                type: string
               reads:
                 description: Allow to read some pre-existing objects
                 items:
@@ -192,7 +233,7 @@ spec:
                             description: configuration of this object
                             type: string
                           name:
-                            description: name of the item (used for handlebars templates)
+                            description: name of the item (used for handlebars renders)
                             type: string
                         required:
                         - key
@@ -200,13 +241,13 @@ spec:
                         type: object
                       type: array
                     name:
-                      description: name of the write (used for handlebars templates)
+                      description: name of the write (used for handlebars renders)
                       type: string
                     path:
                       description: path appended to the client's baseurl for this group of objects
                       type: string
                     read_method:
-                      description: 'Method to use when reading an object (default: Post)'
+                      description: 'Method to use when reading an object (default: Get)'
                       enum:
                       - Get
                       nullable: true
@@ -215,6 +256,23 @@ spec:
                   - items
                   - name
                   - path
+                  type: object
+                nullable: true
+                type: array
+              templates:
+                description: List Handlebars templates to register
+                items:
+                  description: templateItem describe a list of handlebars templates that will be registered with given name
+                  properties:
+                    name:
+                      description: name of the input (used for handlebars renders)
+                      type: string
+                    template:
+                      description: The template to register
+                      type: string
+                  required:
+                  - name
+                  - template
                   type: object
                 nullable: true
                 type: array
@@ -245,7 +303,7 @@ spec:
                             description: configuration of this object
                             type: object
                           name:
-                            description: 'name of the item (used for handlebars templates: write.<group>.<name>)'
+                            description: 'name of the item (used for handlebars renders: write.<group>.<name>)'
                             type: string
                           teardown:
                             description: 'Delete the Object on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)'
@@ -261,7 +319,7 @@ spec:
                       nullable: true
                       type: string
                     name:
-                      description: 'name of the write (used for handlebars templates: write.<name>)'
+                      description: 'name of the write (used for handlebars renders: write.<name>)'
                       type: string
                     path:
                       description: path appended to the client's baseurl for this group of objects
@@ -323,6 +381,8 @@ spec:
                       - InputMissing
                       - InputFailed
                       - TemplateFailed
+                      - PreScriptFailed
+                      - PostScriptFailed
                       - ReadFailed
                       - WriteFailed
                       - WriteDeleteFailed
@@ -337,6 +397,9 @@ spec:
                   - type
                   type: object
                 type: array
+              generation:
+                format: int64
+                type: integer
               owned:
                 items:
                   description: List all owned k8s objects
@@ -367,23 +430,32 @@ spec:
                 items:
                   description: List all owned rest objects
                   properties:
-                    deleteUrl:
-                      description: Object URL that will receive a delete on teardown
-                      type: string
                     group:
                       description: Object writeGroup
+                      type: string
+                    key:
+                      description: Object key
                       type: string
                     name:
                       description: Object name within its writeGroup
                       type: string
+                    teardown:
+                      description: should we manage this object deletion
+                      type: boolean
+                    url:
+                      description: Object root-URL
+                      type: string
                   required:
-                  - deleteUrl
                   - group
+                  - key
                   - name
+                  - teardown
+                  - url
                   type: object
                 type: array
             required:
             - conditions
+            - generation
             - owned
             - ownedTarget
             type: object

@@ -5,8 +5,8 @@ use rhai::Map;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Client,Response};
 use tokio::runtime::Handle;
-use anyhow::{Result,bail};
 use tracing::*;
+use crate::{Error::*,Error};
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
 pub enum ReadMethod {
@@ -78,6 +78,7 @@ impl RestClient {
         self.add_header("Authorization", format!("Basic {hash}").as_str())
     }
     pub fn http_get(self, path:&str) -> std::result::Result<Response, reqwest::Error> {
+        warn!("HTTP_GET {}",format!("{}/{}",self.baseurl,path));
         let mut client = Client::new().get(format!("{}/{}",self.baseurl,path));
         for (key,val) in self.headers {
             client = client.header(key.to_string(), val.to_string());
@@ -86,7 +87,20 @@ impl RestClient {
             client.send().await
         })})
     }
-    pub fn http_patch(self, path:&str, body: &str) -> std::result::Result<Response, reqwest::Error> {
+    pub fn body_get(self, path:&str) -> Result<String,Error> {
+        let response = self.http_get(path).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        if ! response.status().is_success() {
+            return Err(Error::MethodFailed("Get".to_string(), format!("The server returned the error: {} {}",response.status().as_str(),response.status().canonical_reason().unwrap_or("unknown"))));
+        }
+        let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        Ok(text)
+    }
+    pub fn json_get(self, path:&str) -> Result<Value,Error> {
+        let text = self.body_get(path).or_else(|e| return Err(e))?;
+        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        Ok(json)
+    }
+    pub fn http_patch(self, path:&str, body: &str) -> Result<Response, reqwest::Error> {
         let mut client = Client::new().patch(format!("{}/{}",self.baseurl,path)).body(body.to_string());
         for (key,val) in self.headers {
             client = client.header(key.to_string(), val.to_string());
@@ -95,7 +109,21 @@ impl RestClient {
             client.send().await
         })})
     }
-    pub fn http_put(self, path:&str, body: &str) -> std::result::Result<Response, reqwest::Error> {
+    pub fn body_patch(self, path:&str, body: &str) -> Result<String, Error> {
+        let response = self.http_patch(path,body).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        if ! response.status().is_success() {
+            return Err(Error::MethodFailed("Patch".to_string(), format!("The server returned the error: {} {}",response.status().as_str(),response.status().canonical_reason().unwrap_or("unknown"))));
+        }
+        let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        Ok(text)
+    }
+    pub fn json_patch(self, path:&str, input: &Value) -> Result<Value,Error> {
+        let body = serde_json::to_string(input).or_else(|e| return Err(Error::JsonError(e)))?;
+        let text = self.body_patch(path,body.as_str()).or_else(|e| return Err(e))?;
+        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        Ok(json)
+    }
+    pub fn http_put(self, path:&str, body: &str) -> Result<Response, reqwest::Error> {
         let mut client = Client::new().put(format!("{}/{}",self.baseurl,path)).body(body.to_string());
         for (key,val) in self.headers {
             client = client.header(key.to_string(), val.to_string());
@@ -104,7 +132,44 @@ impl RestClient {
             client.send().await
         })})
     }
-    pub fn http_delete(self, path:&str) -> std::result::Result<Response, reqwest::Error> {
+    pub fn body_put(self, path:&str, body: &str) -> Result<String, Error> {
+        let response = self.http_put(path,body).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        if ! response.status().is_success() {
+            return Err(Error::MethodFailed("Put".to_string(), format!("The server returned the error: {} {}",response.status().as_str(),response.status().canonical_reason().unwrap_or("unknown"))));
+        }
+        let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        Ok(text)
+    }
+    pub fn json_put(self, path:&str, input: &Value) -> Result<Value,Error> {
+        let body = serde_json::to_string(input).or_else(|e| return Err(Error::JsonError(e)))?;
+        let text = self.body_put(path,body.as_str()).or_else(|e| return Err(e))?;
+        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        Ok(json)
+    }
+    pub fn http_post(self, path:&str, body: &str) -> Result<Response, reqwest::Error> {
+        let mut client = Client::new().post(format!("{}/{}",self.baseurl,path)).body(body.to_string());
+        for (key,val) in self.headers {
+            client = client.header(key.to_string(), val.to_string());
+        }
+        tokio::task::block_in_place(|| {Handle::current().block_on(async move {
+            client.send().await
+        })})
+    }
+    pub fn body_post(self, path:&str, body: &str) -> Result<String, Error> {
+        let response = self.http_patch(path,body).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        if ! response.status().is_success() {
+            return Err(Error::MethodFailed("Post".to_string(), format!("The server returned the error: {} {}",response.status().as_str(),response.status().canonical_reason().unwrap_or("unknown"))));
+        }
+        let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        Ok(text)
+    }
+    pub fn json_post(self, path:&str, input: &Value) -> Result<Value,Error> {
+        let body = serde_json::to_string(input).or_else(|e| return Err(Error::JsonError(e)))?;
+        let text = self.body_post(path,body.as_str()).or_else(|e| return Err(e))?;
+        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        Ok(json)
+    }
+    pub fn http_delete(self, path:&str) -> Result<Response, reqwest::Error> {
         let mut client = Client::new().delete(format!("{}/{}",self.baseurl,path));
         for (key,val) in self.headers {
             client = client.header(key.to_string(), val.to_string());
@@ -113,47 +178,54 @@ impl RestClient {
             client.send().await
         })})
     }
-    pub fn obj_list(self, path: &str) {
-        let res = self.http_get(path);
-
+    pub fn body_delete(self, path:&str) -> Result<String,Error> {
+        let response = self.http_delete(path).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        if ! response.status().is_success() {
+            return Err(Error::MethodFailed("Get".to_string(), format!("The server returned the error: {} {}",response.status().as_str(),response.status().canonical_reason().unwrap_or("unknown"))));
+        }
+        let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
+        Ok(text)
     }
-    pub fn obj_read(self, method:ReadMethod, path: &str, key:&str) -> Result<Value> {
+    pub fn json_delete(self, path:&str) -> Result<Value,Error> {
+        let text = self.body_delete(path).or_else(|e| return Err(e))?;
+        let json = serde_json::from_str(&text).or_else(|e| return Err(Error::JsonError(e)))?;
+        Ok(json)
+    }
+
+    pub fn obj_read(self, method:ReadMethod, path: &str, key:&str) -> Result<Value,Error> {
+        let full_path = if key=="" {path.to_string()} else {format!("{path}/{key}")};
         if method == ReadMethod::Get {
-            // TODO xD
-            Ok(json!({}))
+            self.json_get(&full_path)
         } else {
-            bail!("unsupported method")
+            Err(UnsupportedMethod)
         }
     }
-    pub fn obj_create(self, method:CreateMethod, path: &str, object:Value) -> Result<Value> {
+    pub fn obj_create(self, method:CreateMethod, path: &str, input: &Value) -> Result<Value,Error> {
         if method == CreateMethod::Post {
-            // TODO xD
-            Ok(json!({}))
+            self.json_post(path, input)
         } else {
-            bail!("unsupported method")
+            Err(UnsupportedMethod)
         }
 
     }
-    pub fn obj_update(self, method:UpdateMethod, path: &str, object:Value) -> Result<Value> {
+    pub fn obj_update(self, method:UpdateMethod, path: &str, key:&str, input:&Value) -> Result<Value,Error> {
+        let full_path = if key=="" {path.to_string()} else {format!("{path}/{key}")};
         if method == UpdateMethod::Patch {
-            // TODO xD
-            Ok(json!({}))
+            self.json_patch(&full_path, input)
         } else if method == UpdateMethod::Post {
-            // TODO xD
-            Ok(json!({}))
+            self.json_post(&full_path, input)
         } else if method == UpdateMethod::Put {
-            // TODO xD
-            Ok(json!({}))
+            self.json_put(&full_path, input)
         } else {
-            bail!("unsupported method")
+            Err(UnsupportedMethod)
         }
     }
-    pub fn obj_delete(self, method:DeleteMethod, path: &str, key:&str) -> Result<Value> {
+    pub fn obj_delete(self, method:DeleteMethod, path: &str, key:&str) -> Result<Value,Error> {
+        let full_path = if key=="" {path.to_string()} else {format!("{path}/{key}")};
         if method == DeleteMethod::Delete {
-            // TODO xD
-            Ok(json!({}))
+            self.json_delete(&full_path)
         } else {
-            bail!("unsupported method")
+            Err(UnsupportedMethod)
         }
     }
 }

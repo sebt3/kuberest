@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::{template, update, create, k8shandlers::{SecretHandler,ConfigMapHandler}, handlebarshandler::HandleBars, httphandler::{RestClient,ReadMethod,CreateMethod,UpdateMethod,DeleteMethod}, telemetry, Error, Metrics, Result};
+use crate::{template, update, create, k8shandlers::{SecretHandler,ConfigMapHandler}, handlebarshandler::HandleBars, httphandler::{RestClient,ReadMethod,CreateMethod,UpdateMethod,DeleteMethod}, rhaihandler::Script, passwordhandler::Passwords, telemetry, Error, Metrics, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use chrono;
@@ -18,9 +18,9 @@ use std::sync::Arc;
 use tokio::{sync::RwLock, time::Duration, runtime::Handle};
 use tracing::*;
 
-pub static RESTPATH_FINALIZER: &str = "restpaths.kuberest.solidite.fr";
+pub static RESTPATH_FINALIZER: &str = "restendpoints.kuberest.solidite.fr";
 
-/// ConfigMapRef describe a data input for handlebars templates from a ConfigMap
+/// ConfigMapRef describe a data input for handlebars renders from a ConfigMap
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct ConfigMapRef {
     /// Name of the ConfigMap
@@ -31,7 +31,7 @@ pub struct ConfigMapRef {
     pub optional: Option<bool>,
 }
 
-/// SecretRef describe a data input for handlebars templates from a Secret
+/// SecretRef describe a data input for handlebars renders from a Secret
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct SecretRef {
     /// Name of the Secret
@@ -42,18 +42,46 @@ pub struct SecretRef {
     pub optional: Option<bool>
 }
 
-// TODO: random data as input (for secret generation)
+/// randomPassword describe the rules to generate a password
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RandomPassword {
+    /// length of the password (default: 32)
+    pub length: Option<u32>,
+    /// weight of alpha caracters (default: 60)
+    pub weight_alphas: Option<u32>,
+    /// weight of numbers caracters (default: 20)
+    pub weight_numbers: Option<u32>,
+    /// weight of symbols caracters (default: 20)
+    pub weight_symbols: Option<u32>,
+}
 
-/// inputItem describe a data input for handlebars templates
+// TODO: ssh-key (priv+pub) as input (for secret generation)
+
+/// inputItem describe a data input for handlebars renders
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InputItem {
-    /// name of the input (used for handlebars templates)
+    /// name of the input (used for handlebars renders)
     pub name: String,
     /// The ConfigMap to select from
     pub config_map_ref: Option<ConfigMapRef>,
     /// The Secret to select from
     pub secret_ref: Option<SecretRef>,
+    /// an handlebars template to be rendered
+    pub handle_bars_render: Option<String>,
+    /// A password generator
+    pub password_generator: Option<RandomPassword>
+}
+
+/// templateItem describe a list of handlebars templates that will be registered with given name
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateItem {
+    /// name of the input (used for handlebars renders)
+    pub name: String,
+    /// The template to register
+    pub template: String,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -92,7 +120,7 @@ impl Default for WebClient {
 /// readGroupItem describe an object to read with the client
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct ReadGroupItem {
-    /// name of the item (used for handlebars templates)
+    /// name of the item (used for handlebars renders)
     pub name: String,
     /// configuration of this object
     pub key: String
@@ -100,11 +128,11 @@ pub struct ReadGroupItem {
 /// ReadGroup describe a rest endpoint within the client sub-paths,
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct ReadGroup {
-    /// name of the write (used for handlebars templates)
+    /// name of the write (used for handlebars renders)
     pub name: String,
     /// path appended to the client's baseurl for this group of objects
     pub path: String,
-    /// Method to use when reading an object (default: Post)
+    /// Method to use when reading an object (default: Get)
     pub read_method: Option<ReadMethod>,
     /// The list of object mapping
     pub items: Vec<ReadGroupItem>
@@ -113,7 +141,7 @@ pub struct ReadGroup {
 /// writeGroupItem describe an object to maintain within
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct WriteGroupItem {
-    /// name of the item (used for handlebars templates: write.<group>.<name>)
+    /// name of the item (used for handlebars renders: write.<group>.<name>)
     pub name: String,
     /// configuration of this object
     pub inputs: serde_json::Map<String, serde_json::Value>,
@@ -123,7 +151,7 @@ pub struct WriteGroupItem {
 /// writeGroup describe a rest endpoint within the client sub-paths,
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 pub struct WriteGroup {
-    /// name of the write (used for handlebars templates: write.<name>)
+    /// name of the write (used for handlebars renders: write.<name>)
     pub name: String,
     /// path appended to the client's baseurl for this group of objects
     pub path: String,
@@ -192,6 +220,8 @@ pub enum ConditionsType {
     InputMissing,
     InputFailed,
     TemplateFailed,
+    PreScriptFailed,
+    PostScriptFailed,
     ReadFailed,
     WriteFailed,
     WriteDeleteFailed,
@@ -233,6 +263,8 @@ impl ApplicationCondition {
     }
     pub fn input_missing(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::InputMissing) }
     pub fn output_exist(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::OutputAlreadyExist) }
+    pub fn pre_script_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::PreScriptFailed) }
+    pub fn post_script_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::PostScriptFailed) }
     pub fn write_exist(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::WriteAlreadyExist) }
     pub fn input_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::InputFailed) }
     pub fn template_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::TemplateFailed) }
@@ -275,19 +307,25 @@ impl OwnedObjects {
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedRestPoint {
-    /// Object URL that will receive a delete on teardown
-    pub delete_url: String,
+    /// Object root-URL
+    pub url: String,
+    /// Object key
+    pub key: String,
     /// Object writeGroup
     pub group: String,
     /// Object name within its writeGroup
-    pub name: String
+    pub name: String,
+    /// should we manage this object deletion
+    pub teardown: bool
 }
 impl OwnedRestPoint {
-    #[must_use] pub fn new(delete_url: &str, group: &str, name:&str) -> OwnedRestPoint {
+    #[must_use] pub fn new(url: &str, key: &str, group: &str, name:&str, teardown: bool) -> OwnedRestPoint {
         OwnedRestPoint {
-            delete_url: delete_url.to_string(),
+            url: url.to_string(),
+            key: key.to_string(),
             group: group.to_string(),
-            name: name.to_string()
+            name: name.to_string(),
+            teardown
         }
     }
 }
@@ -298,14 +336,20 @@ impl OwnedRestPoint {
 #[kube(kind = "RestEndPoint", group = "kuberest.solidite.fr", version = "v1", namespaced, status = "RestEndPointStatus", shortname = "rep")]
 #[serde(rename_all = "camelCase")]
 pub struct RestEndPointSpec {
-    /// List input source for Handlebars templates
+    /// List Handlebars templates to register
+    pub templates: Option<Vec<TemplateItem>>,
+    /// List input source for Handlebars renders
     pub inputs: Option<Vec<InputItem>>,
     /// Define the how the client should connect to the API endpoint(s)
     pub client: WebClient,
+    /// A rhai pre-script to setup some complex variables
+    pub pre: Option<String>,
     /// Allow to read some pre-existing objects
     pub reads: Option<Vec<ReadGroup>>,
     /// Sub-paths to the client. Allow to describe the objects to create on the end-point
     pub writes: Option<Vec<WriteGroup>>,
+    /// A rhai post-script for final validation if any
+    pub post: Option<String>,
     /// Objects (Secret or ConfigMap) to create at the end of the process
     pub outputs: Option<Vec<OutputItem>>,
     /// checkFrequency define the pooling interval (in seconds, default: 300)
@@ -317,7 +361,8 @@ pub struct RestEndPointSpec {
 pub struct RestEndPointStatus {
     pub conditions: Vec<ApplicationCondition>,
     pub owned: Vec<OwnedObjects>,
-    pub owned_target: Vec<OwnedRestPoint>
+    pub owned_target: Vec<OwnedRestPoint>,
+    pub generation: i64
 }
 
 // Context for our reconciler
@@ -351,9 +396,9 @@ async fn reconcile(rest_path: Arc<RestEndPoint>, ctx: Arc<Context>) -> Result<Ac
     .map_err(|e| Error::FinalizerError(Box::new(e)))
 }
 
-fn error_policy(restpath: Arc<RestEndPoint>, error: &Error, ctx: Arc<Context>) -> Action {
+fn error_policy(restendpoint: Arc<RestEndPoint>, error: &Error, ctx: Arc<Context>) -> Action {
     warn!("reconcile failed: {:?}", error);
-    ctx.metrics.reconcile_failure(&restpath, error);
+    ctx.metrics.reconcile_failure(&restendpoint, error);
     Action::requeue(Duration::from_secs(5 * 60))
 }
 
@@ -374,13 +419,45 @@ impl RestEndPoint {
     }
     // Reconcile (for non-finalizer related changes)
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
+        // Before everything : is this reconcillation because of our last status update ?
+        if let Some(status) = self.status.clone() {
+            let next = self.spec.check_frequency.clone().unwrap_or(15*60);
+            let now = chrono::offset::Utc::now();
+            if status.generation == self.metadata.generation.unwrap_or(1) {
+                let delta: u64 =  (now - status.conditions[0].last_transition_time.unwrap_or(now)).num_seconds().try_into().unwrap();
+                if delta < next {
+                    debug!("The spec didnt change, only the status (which this code just did), waiting {} more secs",next-delta);
+                    return Ok(Action::requeue(Duration::from_secs(next-delta)));
+                }
+            }
+        }
+
         let client = ctx.client.clone();
         let recorder = ctx.diagnostics.read().await.recorder(client.clone(), self);
         let ns = self.namespace().unwrap();
         let name = self.name_any();
-        let restpaths: Api<RestEndPoint> = Api::namespaced(client, &ns);
+        let restendpoints: Api<RestEndPoint> = Api::namespaced(client, &ns);
         let mut conditions: Vec<ApplicationCondition> = Vec::new();
-        let mut values = serde_json::json!({"input":{},"read":{},"write":{}});
+        let mut values = serde_json::json!({"input":{},"pre":{},"read":{},"write":{},"post":{}});
+        let mut hbs = HandleBars::new();
+        hbs.setup();
+        if let Some(templates)  = self.spec.templates.clone() {
+            for item in templates {
+                hbs.register_template(&item.name, &item.template).unwrap_or_else(|e| {
+                    tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                        recorder.publish(Event {
+                            type_: EventType::Warning,
+                            reason: format!("Failed register template: template.{}",item.name),
+                            note: Some(format!("{e}")),
+                            action: "registering".into(),
+                            secondary: None,
+                        }).await.map_err(Error::KubeError).unwrap();
+                    })});
+                    conditions.push(ApplicationCondition::template_failed(&format!("Registering template.{} raised {e}",item.name)));
+                });
+            }
+        }
+        let mut rhai = Script::extended();
 
         // Read the inputs first
         if let Some(inputs) = self.spec.clone().inputs {
@@ -466,8 +543,16 @@ impl RestEndPoint {
                         }).await.map_err(Error::KubeError)?;
                         conditions.push(ApplicationCondition::input_failed(&format!("Input '{}' ConfigMap {}.{} not found",input.name,my_ns,cfgmap.name)));
                     }
+                } else if let Some(render) = input.handle_bars_render {
+                    values["input"][input.name] = json!(template!(render.as_str(),hbs,&values,conditions,recorder));
+                } else if let Some(password_def) = input.password_generator {
+                    values["input"][input.name] = json!(Passwords::new().generate(
+                        password_def.length.unwrap_or(32),
+                        password_def.weight_alphas.unwrap_or(60),
+                        password_def.weight_numbers.unwrap_or(20),
+                        password_def.weight_symbols.unwrap_or(20)
+                    ));
                 } else {
-                    // First send an event about the issue
                     recorder.publish(Event {
                         type_: EventType::Warning,
                         reason: "EmptyInput".into(),
@@ -475,17 +560,15 @@ impl RestEndPoint {
                         action: "Fail".into(),
                         secondary: None,
                     }).await.map_err(Error::KubeError)?;
-                    // Then update the status of the object
                     conditions.push(ApplicationCondition::input_failed(&format!("Input '{}' have no source",input.name)));
                     conditions.push(ApplicationCondition::not_ready(&format!("Input '{}' have no source",input.name)));
                     let new_status = Patch::Apply(json!({
                         "apiVersion": "kuberest.solidite.fr/v1",
                         "kind": "RestEndPoint",
-                        "status": RestEndPointStatus { conditions, owned: self.owned(), owned_target: self.owned_target() }
+                        "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
                     }));
                     let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                    let _o = restpaths.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
-                    // Finally fail the object
+                    let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
                     return Err(Error::IllegalRestEndPoint);
                 }
             }
@@ -494,25 +577,18 @@ impl RestEndPoint {
         if conditions.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
             let msg = "Some input failed";
             conditions.push(ApplicationCondition::not_ready(msg));
-            // Only update the status if it has changed
-            if ! if let Some(status) = self.status.clone() {
-                status.conditions.len() == conditions.len() && status.conditions.iter().any(|c| c.condition_type ==ConditionsType::Ready && c.message==msg)
-            } else {false} {
-                let new_status = Patch::Apply(json!({
-                    "apiVersion": "kuberest.solidite.fr/v1",
-                    "kind": "RestEndPoint",
-                    "status": RestEndPointStatus { conditions, owned: self.owned(), owned_target: self.owned_target() }
-                }));
-                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                let _o = restpaths.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
-            }
-            let next = if let Some(freq) = self.spec.check_frequency {freq} else {5*60};
-            return Ok(Action::requeue(Duration::from_secs(next)));
+            let new_status = Patch::Apply(json!({
+                "apiVersion": "kuberest.solidite.fr/v1",
+                "kind": "RestEndPoint",
+                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+            }));
+            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+            return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
         }
+        rhai.push_constant("input", &values["input"]);
 
-        // Setup the template engine then the httpClient
-        let mut hbs = HandleBars::new();
-        hbs.setup();
+        // Setup the httpClient
         let mut rest = RestClient::new(self.spec.client.baseurl.clone().as_str());
         if let Some(headers) = self.spec.client.headers.clone() {
             for (key,value) in headers {
@@ -525,20 +601,44 @@ impl RestEndPoint {
         if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
             let msg = "Client setup failed";
             conditions.push(ApplicationCondition::not_ready(msg));
-            // Only update the status if it has changed
-            if ! if let Some(status) = self.status.clone() {
-                status.conditions.len() == conditions.len() && status.conditions.iter().any(|c| c.condition_type ==ConditionsType::Ready && c.message==msg)
-            } else {false} {
+            let new_status = Patch::Apply(json!({
+                "apiVersion": "kuberest.solidite.fr/v1",
+                "kind": "RestEndPoint",
+                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+            }));
+            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+            return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
+        }
+
+        // Run the pre script
+        if let Some(script) = self.spec.pre.clone() {
+            values["pre"] = rhai.eval(&script).unwrap_or_else(|e|{
+                conditions.push(ApplicationCondition::pre_script_failed(&format!("{e}")));
+                futures::executor::block_on(async {
+                    recorder.publish(Event {
+                        type_: EventType::Warning,
+                        reason: "pre-script failed".into(),
+                        note: Some(format!("pre-script failed with: {e}")),
+                        action: "pre-script".into(),
+                        secondary: None,
+                    }).await.map_err(Error::KubeError).unwrap();
+                });
+                json!({})
+            });
+            // Validate that pre-script went Ok
+            if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
+                let msg = "Pre-script failed";
+                conditions.push(ApplicationCondition::not_ready(msg));
                 let new_status = Patch::Apply(json!({
                     "apiVersion": "kuberest.solidite.fr/v1",
                     "kind": "RestEndPoint",
-                    "status": RestEndPointStatus { conditions, owned: self.owned(), owned_target: self.owned_target() }
+                    "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
                 }));
                 let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                let _o = restpaths.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+                let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+                return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
             }
-            let next = if let Some(freq) = self.spec.check_frequency {freq} else {5*60};
-            return Ok(Action::requeue(Duration::from_secs(next)));
         }
 
         // Handle each Reads
@@ -547,7 +647,7 @@ impl RestEndPoint {
                 values["read"][group.name.clone()] = serde_json::json!({});
                 let path = template!(group.path.as_str(),hbs,&values,conditions,recorder);
                 for read in group.items {
-                    values["read"][group.name.clone()][read.name] = rest.clone().obj_read(ReadMethod::Get, &path.as_str(), &template!(read.key.as_str(),hbs,&values,conditions,recorder)).unwrap_or_else(|e| {
+                    values["read"][group.name.clone()][read.name] = rest.clone().obj_read(group.read_method.clone().unwrap_or(self.spec.client.read_method.clone().unwrap_or(ReadMethod::Get)), &path.as_str(), &template!(read.key.as_str(),hbs,&values,conditions,recorder)).unwrap_or_else(|e| {
                         tokio::task::block_in_place(|| {Handle::current().block_on(async {
                             recorder.publish(Event {
                                 type_: EventType::Warning,
@@ -567,57 +667,115 @@ impl RestEndPoint {
         if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
             let msg = "Some read have failed";
             conditions.push(ApplicationCondition::not_ready(msg));
-            // Only update the status if it has changed
-            if ! if let Some(status) = self.status.clone() {
-                status.conditions.len() == conditions.len() && status.conditions.iter().any(|c| c.condition_type ==ConditionsType::Ready && c.message==msg)
-            } else {false} {
-                let new_status = Patch::Apply(json!({
-                    "apiVersion": "kuberest.solidite.fr/v1",
-                    "kind": "RestEndPoint",
-                    "status": RestEndPointStatus { conditions, owned: self.owned(), owned_target: self.owned_target() }
-                }));
-                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                let _o = restpaths.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
-            }
-            let next = if let Some(freq) = self.spec.check_frequency {freq} else {5*60};
-            return Ok(Action::requeue(Duration::from_secs(next)));
+            let new_status = Patch::Apply(json!({
+                "apiVersion": "kuberest.solidite.fr/v1",
+                "kind": "RestEndPoint",
+                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+            }));
+            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+            return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
         }
+        rhai.push_constant("read", &values["read"]);
 
         // TODO: Handle each Writes
         let mut target_new: Vec<OwnedRestPoint> = Vec::new();
-        /*if let Some(writes) = self.spec.writes.clone() {
+        if let Some(writes) = self.spec.writes.clone() {
             for group in writes {
+                values["write"][group.name.clone()] = serde_json::json!({});
+                let path = template!(group.path.as_str(),hbs,&values,conditions,recorder);
+                for item in group.items {
+                    let mut values = json!({});
+                    for (key,val) in item.inputs.clone() {
+                        if val.is_string() {
 
+                        } else {
+                            
+                        }
+                    }
+                    let key = if self.owned_target().clone().into_iter().any(|t| t.group==group.name && t.name == item.name) {
+                        // TODO: Update the object
+                        let myself = self.owned_target().clone().into_iter().find(|t| t.group==group.name && t.name == item.name ).unwrap();
+                        let obj = rest.clone().obj_update(group.update_method.clone().unwrap_or(self.spec.client.update_method.clone().unwrap_or(UpdateMethod::Patch)), &path.as_str(), &myself.key,&values).unwrap_or_else(|e| {
+                            tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                                recorder.publish(Event {
+                                    type_: EventType::Warning,
+                                    reason: format!("Failed updating: write.{}.{}",group.name.clone(),item.name),
+                                    note: Some(format!("{e}")),
+                                    action: "updating".into(),
+                                    secondary: None,
+                                }).await.map_err(Error::KubeError).unwrap();
+                            })});
+                            conditions.push(ApplicationCondition::write_failed(&format!("Updating write.{}.{} raised {e}",group.name.clone(),item.name)));
+                            json!({})
+                        });
+                        "todo".to_string()
+                    } else {
+                        // TODO : create the object
+                        "todo".to_string()
+                    };
+                    target_new.push(OwnedRestPoint::new(
+                        format!("{}/{}",self.spec.client.baseurl.clone(),group.path).as_str(),
+                        &key.as_str(),
+                        &group.name.as_str(),
+                        &item.name.as_str(),
+                        item.teardown.unwrap_or(group.teardown.unwrap_or(self.spec.client.teardown.unwrap_or(true)))
+                    ));
+                }
             }
-        }*/
+        }
+        // Delete old owned writes
+        for old in self.owned_target().clone() {
+            if old.teardown && ! target_new.clone().into_iter().any(|t| t.group==old.group && t.name==old.name) {
+                // TODO : delete that old object
+            }
+        }
 
 
-
-
-        // TODO: delete old owned writes
-
-
-
-
-        // Verify that all writes when OK
-        if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing && c.condition_type!=ConditionsType::WriteAlreadyExist) {
-            let msg = "Some read have failed";
-            conditions.push(ApplicationCondition::not_ready(msg));
-            // Only update the status if it has changed
-            if ! if let Some(status) = self.status.clone() {
-                status.conditions.len() == conditions.len() && status.conditions.iter().any(|c| c.condition_type ==ConditionsType::Ready && c.message==msg)
-            } else {false} {
+        // Run the post script
+        if let Some(script) = self.spec.post.clone() {
+            values["post"] = rhai.eval(&script).unwrap_or_else(|e|{
+                conditions.push(ApplicationCondition::post_script_failed(&format!("{e}")));
+                futures::executor::block_on(async {
+                    recorder.publish(Event {
+                        type_: EventType::Warning,
+                        reason: "post-script failed".into(),
+                        note: Some(format!("post-script failed with: {e}")),
+                        action: "post-script".into(),
+                        secondary: None,
+                    }).await.map_err(Error::KubeError).unwrap();
+                });
+                json!({})
+            });
+            // Validate that post-script went Ok
+            if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
+                let msg = "Post-script failed";
+                conditions.push(ApplicationCondition::not_ready(msg));
                 let new_status = Patch::Apply(json!({
                     "apiVersion": "kuberest.solidite.fr/v1",
                     "kind": "RestEndPoint",
-                    "status": RestEndPointStatus { conditions, owned: self.owned(), owned_target: target_new }
+                    "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
                 }));
                 let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                let _o = restpaths.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+                let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+                return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
             }
-            let next = if let Some(freq) = self.spec.check_frequency {freq} else {5*60};
-            return Ok(Action::requeue(Duration::from_secs(next)));
         }
+
+        // Verify that all writes went OK
+        if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing && c.condition_type!=ConditionsType::WriteAlreadyExist) {
+            let msg = "Some read have failed";
+            conditions.push(ApplicationCondition::not_ready(msg));
+            let new_status = Patch::Apply(json!({
+                "apiVersion": "kuberest.solidite.fr/v1",
+                "kind": "RestEndPoint",
+                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: target_new }
+            }));
+            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+            return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
+        }
+        rhai.push_constant("write", &values["write"]);
 
         // Finally: handle Outputs
         let mut owned_new: Vec<OwnedObjects> = Vec::new();
@@ -711,7 +869,7 @@ impl RestEndPoint {
                             let own = if output.teardown.unwrap_or(true) && my_ns==self.namespace().unwrap_or(my_ns.clone()) {Some(self)} else {None};
                             if let Some(sec) = create!(cms, "ConfigMap", own, output, my_ns,&my_values,conditions,recorder) {
                                 if output.teardown.unwrap_or(true) {
-                                    owned_new.push(OwnedObjects::secret(sec.metadata.name.unwrap().as_str(), sec.metadata.namespace.unwrap().as_str(), sec.metadata.uid.unwrap().as_str()));
+                                    owned_new.push(OwnedObjects::configmap(sec.metadata.name.unwrap().as_str(), sec.metadata.namespace.unwrap().as_str(), sec.metadata.uid.unwrap().as_str()));
                                 }
                             }
                         }
@@ -732,7 +890,7 @@ impl RestEndPoint {
                             let own = if output.teardown.unwrap_or(true) && my_ns==self.namespace().unwrap_or(my_ns.clone()) {Some(self)} else {None};
                             if let Some(sec) = create!(cms, "ConfigMap", own, output.clone(), my_ns,&my_values,conditions,recorder) {
                                 if output.teardown.unwrap_or(true) {
-                                    owned_new.push(OwnedObjects::secret(sec.metadata.name.unwrap().as_str(), sec.metadata.namespace.unwrap().as_str(), sec.metadata.uid.unwrap().as_str()));
+                                    owned_new.push(OwnedObjects::configmap(sec.metadata.name.unwrap().as_str(), sec.metadata.namespace.unwrap().as_str(), sec.metadata.uid.unwrap().as_str()));
                                 }
                             }
                         }
@@ -742,7 +900,7 @@ impl RestEndPoint {
         }
         // Handle every owned object that is not in the new list
         for obj in self.clone().owned() {
-            if ! owned_new.clone().into_iter().any(|n| n.kind == obj.kind && n.namespace == obj.namespace && n.name == obj.namespace) {
+            if ! owned_new.clone().into_iter().any(|n| n.kind == obj.kind && n.namespace == obj.namespace && n.name == obj.name) {
                 if obj.kind == Kind::Secret {
                     let mut secrets = SecretHandler::new(&ctx.client.clone(), &obj.namespace);
                     if secrets.have_uid(&obj.name, &obj.uid).await {
@@ -761,9 +919,9 @@ impl RestEndPoint {
                         })
                     }
                 } else if obj.kind == Kind::ConfigMap {
-                    let mut secrets = ConfigMapHandler::new(&ctx.client.clone(), &obj.namespace);
-                    if secrets.have_uid(&obj.name, &obj.uid).await {
-                        secrets.delete(obj.name.as_str()).await.unwrap_or_else(|e| {
+                    let mut cms = ConfigMapHandler::new(&ctx.client.clone(), &obj.namespace);
+                    if cms.have_uid(&obj.name, &obj.uid).await {
+                        cms.delete(obj.name.as_str()).await.unwrap_or_else(|e| {
                             tokio::task::block_in_place(|| {Handle::current().block_on(async {
                                 recorder.publish(Event {
                                     type_: EventType::Warning,
@@ -785,36 +943,25 @@ impl RestEndPoint {
         if conditions.iter().any(|c| c.condition_type!=ConditionsType::InputMissing && c.condition_type!=ConditionsType::WriteAlreadyExist&& c.condition_type!=ConditionsType::OutputAlreadyExist ) {
             let msg = "Some output have failed";
             conditions.push(ApplicationCondition::not_ready(msg));
-            // Only update the status if it has changed
-            if ! if let Some(status) = self.status.clone() {
-                status.conditions.len() == conditions.len() && status.conditions.iter().any(|c| c.condition_type ==ConditionsType::Ready && c.message==msg)
-            } else {false} {
-                let new_status = Patch::Apply(json!({
-                    "apiVersion": "kuberest.solidite.fr/v1",
-                    "kind": "RestEndPoint",
-                    "status": RestEndPointStatus { conditions, owned: owned_new, owned_target: target_new }
-                }));
-                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                let _o = restpaths.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
-            }
+            let new_status = Patch::Apply(json!({
+                "apiVersion": "kuberest.solidite.fr/v1",
+                "kind": "RestEndPoint",
+                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: owned_new, owned_target: target_new }
+            }));
+            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
         } else {
             let msg = "All done";
             conditions.push(ApplicationCondition::is_ready(msg));
-            // Only update the status if it has changed
-            if ! if let Some(status) = self.status.clone() {
-                status.conditions.len() == conditions.len() && status.conditions.iter().any(|c| c.condition_type ==ConditionsType::Ready && c.message==msg)
-            } else {false} {
-                let new_status = Patch::Apply(json!({
-                    "apiVersion": "kuberest.solidite.fr/v1",
-                    "kind": "RestEndPoint",
-                    "status": RestEndPointStatus { conditions, owned: owned_new, owned_target: target_new }
-                }));
-                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                let _o = restpaths.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
-            }
+            let new_status = Patch::Apply(json!({
+                "apiVersion": "kuberest.solidite.fr/v1",
+                "kind": "RestEndPoint",
+                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: owned_new, owned_target: target_new }
+            }));
+            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
         }
-        let next = if let Some(freq) = self.spec.check_frequency {freq} else {5*60};
-        Ok(Action::requeue(Duration::from_secs(next)))
+        Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))))
     }
 
     // Finalizer cleanup (the object was deleted, ensure nothing is orphaned)
@@ -825,7 +972,7 @@ impl RestEndPoint {
         let recorder = Recorder::new(client.clone(), reporter, self.object_ref(&()));
         let ns = self.namespace().unwrap();
         let name = self.name_any();
-        let restpaths: Api<RestEndPoint> = Api::namespaced(client, &ns);
+        let restendpoints: Api<RestEndPoint> = Api::namespaced(client, &ns);
         let mut conditions: Vec<ApplicationCondition> = Vec::new();
         let mut owned_new: Vec<OwnedObjects> = Vec::new();
         let mut target_new: Vec<OwnedRestPoint> = Vec::new();
@@ -875,18 +1022,13 @@ impl RestEndPoint {
         if conditions.len()>0 || owned_new.len()>0 || target_new.len()>0 {
             let msg = "Some teardown failed";
             conditions.push(ApplicationCondition::not_ready(msg));
-            // Only update the status if it has changed
-            if ! if let Some(status) = self.status.clone() {
-                status.conditions.len() == conditions.len() && status.conditions.iter().any(|c| c.condition_type ==ConditionsType::Ready && c.message==msg)
-            } else {false} {
-                let new_status = Patch::Apply(json!({
-                    "apiVersion": "kuberest.solidite.fr/v1",
-                    "kind": "RestEndPoint",
-                    "status": RestEndPointStatus { conditions, owned: owned_new, owned_target: target_new }
-                }));
-                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                let _o = restpaths.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
-            }
+            let new_status = Patch::Apply(json!({
+                "apiVersion": "kuberest.solidite.fr/v1",
+                "kind": "RestEndPoint",
+                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: owned_new, owned_target: target_new }
+            }));
+            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
             Err(Error::TeardownIncomplete)
         } else {
             Ok(Action::await_change())
@@ -906,13 +1048,13 @@ impl Default for Diagnostics {
     fn default() -> Self {
         Self {
             last_event: Utc::now(),
-            reporter: "restpath-controller".into(),
+            reporter: "restendpoint-controller".into(),
         }
     }
 }
 impl Diagnostics {
-    fn recorder(&self, client: Client, restpath: &RestEndPoint) -> Recorder {
-        Recorder::new(client, self.reporter.clone(), restpath.object_ref(&()))
+    fn recorder(&self, client: Client, restendpoint: &RestEndPoint) -> Recorder {
+        Recorder::new(client, self.reporter.clone(), restendpoint.object_ref(&()))
     }
 }
 
@@ -950,13 +1092,13 @@ impl State {
 /// Initialize the controller and shared state (given the crd is installed)
 pub async fn run(state: State) {
     let client: Client = Client::try_default().await.expect("failed to create kube Client");
-    let restpaths = Api::<RestEndPoint>::all(client.clone());
-    if let Err(e) = restpaths.list(&ListParams::default().limit(1)).await {
+    let restendpoints = Api::<RestEndPoint>::all(client.clone());
+    if let Err(e) = restendpoints.list(&ListParams::default().limit(1)).await {
         error!("CRD is not queryable; {e:?}. Is the CRD installed?");
         info!("Installation: cargo run --bin crdgen | kubectl apply -f -");
         std::process::exit(1);
     }
-    Controller::new(restpaths, Config::default().any_semantic())
+    Controller::new(restendpoints, Config::default().any_semantic())
         .shutdown_on_signal()
         .run(reconcile, error_policy, state.to_context(client))
         .filter_map(|x| async move { std::result::Result::ok(x) })
@@ -972,60 +1114,60 @@ mod test {
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn restpath_without_finalizer_gets_a_finalizer() {
+    async fn restendpoint_without_finalizer_gets_a_finalizer() {
         let (testctx, fakeserver, _) = Context::test();
-        let restpath = RestEndPoint::test();
-        let mocksrv = fakeserver.run(Scenario::FinalizerCreation(restpath.clone()));
-        reconcile(Arc::new(restpath), testctx).await.expect("reconciler");
+        let restendpoint = RestEndPoint::test();
+        let mocksrv = fakeserver.run(Scenario::FinalizerCreation(restendpoint.clone()));
+        reconcile(Arc::new(restendpoint), testctx).await.expect("reconciler");
         timeout_after_1s(mocksrv).await;
     }
 
     #[tokio::test]
-    async fn finalized_restpath_causes_status_patch() {
+    async fn finalized_restendpoint_causes_status_patch() {
         let (testctx, fakeserver, _) = Context::test();
-        let restpath = RestEndPoint::test().finalized();
-        let mocksrv = fakeserver.run(Scenario::StatusPatch(restpath.clone()));
-        reconcile(Arc::new(restpath), testctx).await.expect("reconciler");
+        let restendpoint = RestEndPoint::test().finalized();
+        let mocksrv = fakeserver.run(Scenario::StatusPatch(restendpoint.clone()));
+        reconcile(Arc::new(restendpoint), testctx).await.expect("reconciler");
         timeout_after_1s(mocksrv).await;
     }
 
 /*
     #[tokio::test]
-    async fn finalized_restpath_with_hide_causes_event_and_hide_patch() {
+    async fn finalized_restendpoint_with_hide_causes_event_and_hide_patch() {
         let (testctx, fakeserver, _) = Context::test();
-        let restpath = RestEndPoint::test().finalized().needs_hide();
-        let scenario = Scenario::EventPublishThenStatusPatch("HideRequested".into(), restpath.clone());
+        let restendpoint = RestEndPoint::test().finalized().needs_hide();
+        let scenario = Scenario::EventPublishThenStatusPatch("HideRequested".into(), restendpoint.clone());
         let mocksrv = fakeserver.run(scenario);
-        reconcile(Arc::new(restpath), testctx).await.expect("reconciler");
+        reconcile(Arc::new(restendpoint), testctx).await.expect("reconciler");
         timeout_after_1s(mocksrv).await;
     }
 */
     #[tokio::test]
-    async fn finalized_restpath_with_delete_timestamp_causes_delete() {
+    async fn finalized_restendpoint_with_delete_timestamp_causes_delete() {
         let (testctx, fakeserver, _) = Context::test();
-        let restpath = RestEndPoint::test().finalized().needs_delete();
-        let mocksrv = fakeserver.run(Scenario::Cleanup("DeleteRequested".into(), restpath.clone()));
-        reconcile(Arc::new(restpath), testctx).await.expect("reconciler");
+        let restendpoint = RestEndPoint::test().finalized().needs_delete();
+        let mocksrv = fakeserver.run(Scenario::Cleanup("DeleteRequested".into(), restendpoint.clone()));
+        reconcile(Arc::new(restendpoint), testctx).await.expect("reconciler");
         timeout_after_1s(mocksrv).await;
     }
 /*
     #[tokio::test]
-    async fn illegal_restpath_reconcile_errors_which_bumps_failure_metric() {
+    async fn illegal_restendpoint_reconcile_errors_which_bumps_failure_metric() {
         let (testctx, fakeserver, _registry) = Context::test();
-        let restpath = Arc::new(RestEndPoint::illegal().finalized());
+        let restendpoint = Arc::new(RestEndPoint::illegal().finalized());
         let mocksrv = fakeserver.run(Scenario::RadioSilence);
-        let res = reconcile(restpath.clone(), testctx.clone()).await;
+        let res = reconcile(restendpoint.clone(), testctx.clone()).await;
         timeout_after_1s(mocksrv).await;
-        assert!(res.is_err(), "apply reconciler fails on illegal restpath");
+        assert!(res.is_err(), "apply reconciler fails on illegal restendpoint");
         let err = res.unwrap_err();
         assert!(err.to_string().contains("IllegalRestEndPoint"));
         // calling error policy with the reconciler error should cause the correct metric to be set
-        error_policy(restpath.clone(), &err, testctx.clone());
+        error_policy(restendpoint.clone(), &err, testctx.clone());
         //dbg!("actual metrics: {}", registry.gather());
         let failures = testctx
             .metrics
             .failures
-            .with_label_values(&["illegal", "finalizererror(applyfailed(illegalrestpathument))"])
+            .with_label_values(&["illegal", "finalizererror(applyfailed(illegalrestendpointument))"])
             .get();
         assert_eq!(failures, 1);
     }
@@ -1039,18 +1181,18 @@ mod test {
         let client = kube::Client::try_default().await.unwrap();
         let ctx = super::State::default().to_context(client.clone());
 
-        // create a test restpath
-        let restpath = RestEndPoint::test().finalized().needs_hide();
-        let restpaths: Api<RestEndPoint> = Api::namespaced(client.clone(), "default");
+        // create a test restendpoint
+        let restendpoint = RestEndPoint::test().finalized().needs_hide();
+        let restendpoints: Api<RestEndPoint> = Api::namespaced(client.clone(), "default");
         let ssapply = PatchParams::apply("ctrltest");
-        let patch = Patch::Apply(restpath.clone());
-        restpaths.patch("test", &ssapply, &patch).await.unwrap();
+        let patch = Patch::Apply(restendpoint.clone());
+        restendpoints.patch("test", &ssapply, &patch).await.unwrap();
 
         // reconcile it (as if it was just applied to the cluster like this)
-        reconcile(Arc::new(restpath), ctx).await.unwrap();
+        reconcile(Arc::new(restendpoint), ctx).await.unwrap();
 
         // verify side-effects happened
-        let output = restpaths.get_status("test").await.unwrap();
+        let output = restendpoints.get_status("test").await.unwrap();
         assert!(output.status.is_some());
         // verify hide event was found
         let events: Api<k8s_openapi::api::core::v1::Event> = Api::all(client.clone());

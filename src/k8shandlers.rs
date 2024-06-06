@@ -76,17 +76,24 @@ impl SecretHandler {
         })).unwrap();
         self.api.create(&PostParams::default(), &secret).await
     }
-    pub async fn update(&mut self, name: &str, strings: &HashMap<String,String>) -> Result<Secret, kube::Error> {
-        let params = PatchParams::apply(RESTPATH_FINALIZER);
+    pub async fn update(&mut self, meta: &Metadata, strings: &HashMap<String,String>) -> Result<Secret, kube::Error> {
+        let mut metadata = serde_json::json!({
+            "name": meta.name
+        });
+        if let Some(labels) = meta.labels.clone() {
+            metadata["labels"] = serde_json::json!(labels);
+        }
+        if let Some(annotations) = meta.annotations.clone() {
+            metadata["annotations"] = serde_json::json!(annotations);
+        }
+        let params = PatchParams::apply(RESTPATH_FINALIZER).force();
         let secret = Patch::Apply(serde_json::json!({
             "apiVersion": "v1",
             "kind": "Secret",
-            "metadata": {
-                "name": name
-            },
+            "metadata": metadata,
             "stringData": strings
         }));
-        self.api.patch(name, &params, &secret).await
+        self.api.patch(&meta.name, &params, &secret).await
     }
     pub async fn delete(&mut self, name: &str) -> Result<()> {
         let _ = self.api.delete(name, &DeleteParams::default()).await.or_else(|e | bail!("{e}"));
@@ -162,17 +169,24 @@ impl ConfigMapHandler {
         })).unwrap();
         self.api.create(&PostParams::default(), &cm).await
     }
-    pub async fn update(&mut self, name: &str, data: &HashMap<String,String>) -> Result<ConfigMap, kube::Error> {
-        let params = PatchParams::apply(RESTPATH_FINALIZER);
+    pub async fn update(&mut self, meta: &Metadata, data: &HashMap<String,String>) -> Result<ConfigMap, kube::Error> {
+        let mut metadata = serde_json::json!({
+            "name": meta.name
+        });
+        if let Some(labels) = meta.labels.clone() {
+            metadata["labels"] = serde_json::json!(labels);
+        }
+        if let Some(annotations) = meta.annotations.clone() {
+            metadata["annotations"] = serde_json::json!(annotations);
+        }
+        let params = PatchParams::apply(RESTPATH_FINALIZER).force();
         let cm = Patch::Apply(serde_json::json!({
             "apiVersion": "v1",
             "kind": "ConfigMap",
-            "metadata": {
-                "name": name
-            },
+            "metadata": metadata,
             "data": data
         }));
-        self.api.patch(name, &params, &cm).await
+        self.api.patch(&meta.name, &params, &cm).await
     }
     pub async fn delete(&mut self, name: &str) -> Result<()> {
         let _ = self.api.delete(name, &DeleteParams::default()).await.or_else(|e | bail!("{e}"));

@@ -49,6 +49,7 @@ handlebars_misc_helpers = { version = "0.16.3", features = ["string", "json", "j
 rhai = { version = "1.18.0", features = ["sync", "serde"] }
 reqwest = "0.12.4"
 base64 = "0.22.1"
+rand = "0.8.5"
 
 [dev-dependencies]
 assert-json-diff = "2.0.2"

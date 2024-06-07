@@ -1,7 +1,7 @@
 [package]
-name = "controller"
-version = "0.12.11"
-authors = ["clux <sszynrae@gmail.com>"]
+name = "kuberest"
+version = "1.0.0"
+authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 default-run = "controller"
 license = "Apache-2.0"
@@ -60,9 +60,3 @@ tower-test = "0.4.0"
 [dependencies.kube]
 features = ["runtime", "client", "derive" ]
 version = "0.91.0"
-
-# testing new releases - ignore
-#git = "https://github.com/kube-rs/kube.git"
-#branch = "main"
-#rev = "19b90ad3a4dbc83e1dd742847c7707333259b1bb"
-#path = "../kube/kube"

@@ -1,4 +1,4 @@
-use rand::{distributions::{Distribution, Uniform, WeightedIndex}, thread_rng, Rng, RngCore};
+use rand::{distributions::{Distribution, Uniform, WeightedIndex}, thread_rng, RngCore};
 
 //const LOWER: &[char] = &['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
 //const UPPER: &[char] = &['A', 'B', 'C', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];

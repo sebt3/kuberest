@@ -259,6 +259,10 @@ spec:
                   type: object
                 nullable: true
                 type: array
+              teardown:
+                description: A rhai teardown-script for a final cleanup on RestEndPoint deletion
+                nullable: true
+                type: string
               templates:
                 description: List Handlebars templates to register
                 items:
@@ -281,13 +285,13 @@ spec:
                 items:
                   description: writeGroup describe a rest endpoint within the client sub-paths,
                   properties:
-                    create_method:
+                    createMethod:
                       description: 'Method to use when creating an object (default: Get)'
                       enum:
                       - Post
                       nullable: true
                       type: string
-                    delete_method:
+                    deleteMethod:
                       description: 'Method to use when deleting an object (default: Delete)'
                       enum:
                       - Delete
@@ -298,10 +302,6 @@ spec:
                       items:
                         description: writeGroupItem describe an object to maintain within
                         properties:
-                          inputs:
-                            additionalProperties: true
-                            description: configuration of this object
-                            type: object
                           name:
                             description: 'name of the item (used for handlebars renders: write.<group>.<name>)'
                             type: string
@@ -309,12 +309,15 @@ spec:
                             description: 'Delete the Object on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)'
                             nullable: true
                             type: boolean
+                          values:
+                            description: configuration of this object (yaml format, use handlebars to generate your needed values)
+                            type: string
                         required:
-                        - inputs
                         - name
+                        - values
                         type: object
                       type: array
-                    key_name:
+                    keyName:
                       description: 'keyName: the key of the object (default: id)'
                       nullable: true
                       type: string
@@ -324,7 +327,7 @@ spec:
                     path:
                       description: path appended to the client's baseurl for this group of objects
                       type: string
-                    read_method:
+                    readMethod:
                       description: 'Method to use when reading an object (default: Post)'
                       enum:
                       - Get
@@ -334,7 +337,7 @@ spec:
                       description: 'Delete the Objects on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)'
                       nullable: true
                       type: boolean
-                    update_method:
+                    updateMethod:
                       description: 'Method to use when updating an object (default: Patch)'
                       enum:
                       - Patch
@@ -383,6 +386,8 @@ spec:
                       - TemplateFailed
                       - PreScriptFailed
                       - PostScriptFailed
+                      - ChangeScriptFailed
+                      - TeardownScriptFailed
                       - ReadFailed
                       - WriteFailed
                       - WriteDeleteFailed
@@ -439,18 +444,18 @@ spec:
                     name:
                       description: Object name within its writeGroup
                       type: string
+                    path:
+                      description: Object path within the client
+                      type: string
                     teardown:
                       description: should we manage this object deletion
                       type: boolean
-                    url:
-                      description: Object root-URL
-                      type: string
                   required:
                   - group
                   - key
                   - name
+                  - path
                   - teardown
-                  - url
                   type: object
                 type: array
             required:

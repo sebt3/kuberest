@@ -80,7 +80,7 @@ macro_rules! template {
                         note: Some(format!("{e}")),
                         action: "templating".into(),
                         secondary: None,
-                    }).await.map_err(Error::KubeError).unwrap();
+                    }).await.map_err(Error::KubeError).unwrap_or(());
                 })});
                 $tmpl.to_string()
             })

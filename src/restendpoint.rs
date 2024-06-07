@@ -143,13 +143,14 @@ pub struct ReadGroup {
 pub struct WriteGroupItem {
     /// name of the item (used for handlebars renders: write.<group>.<name>)
     pub name: String,
-    /// configuration of this object
-    pub inputs: serde_json::Map<String, serde_json::Value>,
+    /// configuration of this object (yaml format, use handlebars to generate your needed values)
+    pub values: String,
     /// Delete the Object on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)
     teardown: Option<bool>
 }
 /// writeGroup describe a rest endpoint within the client sub-paths,
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct WriteGroup {
     /// name of the write (used for handlebars renders: write.<name>)
     pub name: String,
@@ -222,6 +223,8 @@ pub enum ConditionsType {
     TemplateFailed,
     PreScriptFailed,
     PostScriptFailed,
+    ChangeScriptFailed,
+    TeardownScriptFailed,
     ReadFailed,
     WriteFailed,
     WriteDeleteFailed,
@@ -265,6 +268,8 @@ impl ApplicationCondition {
     pub fn output_exist(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::OutputAlreadyExist) }
     pub fn pre_script_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::PreScriptFailed) }
     pub fn post_script_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::PostScriptFailed) }
+    pub fn change_script_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::ChangeScriptFailed) }
+    pub fn teardown_script_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::TeardownScriptFailed) }
     pub fn write_exist(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::WriteAlreadyExist) }
     pub fn input_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::InputFailed) }
     pub fn template_failed(message: &str) -> ApplicationCondition { ApplicationCondition::new(message,ConditionsStatus::True,ConditionsType::TemplateFailed) }
@@ -307,8 +312,8 @@ impl OwnedObjects {
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedRestPoint {
-    /// Object root-URL
-    pub url: String,
+    /// Object path within the client
+    pub path: String,
     /// Object key
     pub key: String,
     /// Object writeGroup
@@ -319,9 +324,9 @@ pub struct OwnedRestPoint {
     pub teardown: bool
 }
 impl OwnedRestPoint {
-    #[must_use] pub fn new(url: &str, key: &str, group: &str, name:&str, teardown: bool) -> OwnedRestPoint {
+    #[must_use] pub fn new(path: &str, key: &str, group: &str, name:&str, teardown: bool) -> OwnedRestPoint {
         OwnedRestPoint {
-            url: url.to_string(),
+            path: path.to_string(),
             key: key.to_string(),
             group: group.to_string(),
             name: name.to_string(),
@@ -354,6 +359,8 @@ pub struct RestEndPointSpec {
     pub outputs: Option<Vec<OutputItem>>,
     /// checkFrequency define the pooling interval (in seconds, default: 300)
     pub check_frequency: Option<u64>,
+    /// A rhai teardown-script for a final cleanup on RestEndPoint deletion
+    pub teardown: Option<String>,
 }
 /// The status object of `RestEndPoint`
 #[derive(Deserialize, Serialize, Clone, Default, Debug, JsonSchema)]
@@ -440,7 +447,6 @@ impl RestEndPoint {
         let mut conditions: Vec<ApplicationCondition> = Vec::new();
         let mut values = serde_json::json!({"input":{},"pre":{},"read":{},"write":{},"post":{}});
         let mut hbs = HandleBars::new();
-        hbs.setup();
         if let Some(templates)  = self.spec.templates.clone() {
             for item in templates {
                 hbs.register_template(&item.name, &item.template).unwrap_or_else(|e| {
@@ -457,7 +463,8 @@ impl RestEndPoint {
                 });
             }
         }
-        let mut rhai = Script::extended();
+        let mut rhai = Script::new();
+        rhai.ctx.set_or_push("hbs", hbs.clone());
 
         // Read the inputs first
         if let Some(inputs) = self.spec.clone().inputs {
@@ -586,18 +593,19 @@ impl RestEndPoint {
             let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
         }
-        rhai.push_constant("input", &values["input"]);
+        rhai.set_dynamic("input", &values["input"]);
+        rhai.set_dynamic("values", &values);
 
         // Setup the httpClient
         let mut rest = RestClient::new(self.spec.client.baseurl.clone().as_str());
         if let Some(headers) = self.spec.client.headers.clone() {
             for (key,value) in headers {
-                rest = rest.add_header(&template!(key.as_str(),hbs,&values,conditions,recorder), &template!(value.as_str(),hbs,&values,conditions,recorder));
+                rest.add_header(&template!(key.as_str(),hbs,&values,conditions,recorder), &template!(value.as_str(),hbs,&values,conditions,recorder));
             }
         }
-        rest = rest.add_header_json();
-        let cnd = conditions.clone();
+        rest.add_header_json();
         // Validate that client setup went Ok
+        let cnd = conditions.clone();
         if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
             let msg = "Client setup failed";
             conditions.push(ApplicationCondition::not_ready(msg));
@@ -610,9 +618,11 @@ impl RestEndPoint {
             let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
         }
+        rhai.ctx.set_or_push("client", rest.clone());
 
         // Run the pre script
         if let Some(script) = self.spec.pre.clone() {
+            let cnd = conditions.clone();
             values["pre"] = rhai.eval(&script).unwrap_or_else(|e|{
                 conditions.push(ApplicationCondition::pre_script_failed(&format!("{e}")));
                 futures::executor::block_on(async {
@@ -640,6 +650,8 @@ impl RestEndPoint {
                 return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
             }
         }
+        rhai.set_dynamic("pre", &values["pre"]);
+        rhai.set_dynamic("values", &values);
 
         // Handle each Reads
         if let Some(reads) = self.spec.reads.clone() {
@@ -664,6 +676,7 @@ impl RestEndPoint {
             }
         }
         // Validate that all reads went Ok
+        let cnd = conditions.clone();
         if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
             let msg = "Some read have failed";
             conditions.push(ApplicationCondition::not_ready(msg));
@@ -676,64 +689,172 @@ impl RestEndPoint {
             let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
         }
-        rhai.push_constant("read", &values["read"]);
+        rhai.set_dynamic("read", &values["read"]);
+        rhai.set_dynamic("values", &values);
 
         // TODO: Handle each Writes
         let mut target_new: Vec<OwnedRestPoint> = Vec::new();
         if let Some(writes) = self.spec.writes.clone() {
             for group in writes {
+                let key_name = group.key_name.unwrap_or(self.spec.client.key_name.clone().unwrap_or("id".to_string()));
                 values["write"][group.name.clone()] = serde_json::json!({});
                 let path = template!(group.path.as_str(),hbs,&values,conditions,recorder);
                 for item in group.items {
-                    let mut values = json!({});
-                    for (key,val) in item.inputs.clone() {
-                        if val.is_string() {
-
+                    let cur_len = conditions.len();
+                    let values = serde_yaml::from_str(template!(item.values.as_str(),hbs,&values,conditions,recorder).as_str()).unwrap_or_else(|e|{
+                        tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                            recorder.publish(Event {
+                                type_: EventType::Warning,
+                                reason: format!("Failed parsing: write.{}.{}.values",group.name.clone(),item.name),
+                                note: Some(format!("{e}")),
+                                action: "writing".into(),
+                                secondary: None,
+                            }).await.map_err(Error::KubeError).unwrap();
+                        })});
+                        conditions.push(ApplicationCondition::write_failed(&format!("Templating write.{}.{}.values raised {e}",group.name.clone(),item.name)));
+                        json!({})
+                    });
+                    if conditions.len() == cur_len {
+                        let key = if self.owned_target().clone().into_iter().any(|t| t.group==group.name && t.name == item.name) {
+                            // TODO: Update the object
+                            let myself = self.owned_target().clone().into_iter().find(|t| t.group==group.name && t.name == item.name ).unwrap();
+                            if myself.key.is_empty() {
+                                tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                                    recorder.publish(Event {
+                                        type_: EventType::Warning,
+                                        reason: format!("Failed updating: write.{}.{}",group.name.clone(),item.name),
+                                        note: Some(format!("known key is empty")),
+                                        action: "updating".into(),
+                                        secondary: None,
+                                    }).await.map_err(Error::KubeError).unwrap();
+                                })});
+                                conditions.push(ApplicationCondition::write_failed(&format!("Will *not* update write.{}.{} with an empty key",group.name.clone(),item.name)));
+                                "".to_string()
+                            } else {
+                                let obj = rest.clone().obj_update(group.update_method.clone().unwrap_or(self.spec.client.update_method.clone().unwrap_or(UpdateMethod::Patch)), &path.as_str(), &myself.key,&values).unwrap_or_else(|e| {
+                                    tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                                        recorder.publish(Event {
+                                            type_: EventType::Warning,
+                                            reason: format!("Failed updating: write.{}.{}",group.name.clone(),item.name),
+                                            note: Some(format!("{e}")),
+                                            action: "updating".into(),
+                                            secondary: None,
+                                        }).await.map_err(Error::KubeError).unwrap();
+                                    })});
+                                    conditions.push(ApplicationCondition::write_failed(&format!("Updating write.{}.{} raised {e}",group.name.clone(),item.name)));
+                                    json!({})
+                                });
+                                let key_name_moved = key_name.clone();
+                                if obj[key_name.clone()].is_i64() {
+                                    obj[key_name.clone()].as_i64().unwrap().to_string()
+                                } else if obj[key_name.clone()].is_u64() {
+                                    obj[key_name.clone()].as_u64().unwrap().to_string()
+                                } else if obj[key_name.clone()].is_number() {
+                                    obj[key_name.clone()].as_number().unwrap().to_string()
+                                } else {
+                                    obj[key_name.clone()].as_str().unwrap_or_else(|| {
+                                        tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                                            recorder.publish(Event {
+                                                type_: EventType::Warning,
+                                                reason: format!("Failed updating: write.{}.{}",group.name.clone(),item.name),
+                                                note: Some(format!("{} not found in {:}",&key_name_moved,obj)),
+                                                action: "updating".into(),
+                                                secondary: None,
+                                            }).await.map_err(Error::KubeError).unwrap();
+                                        })});
+                                        conditions.push(ApplicationCondition::write_failed(&format!("While updating write.{}.{} {} not found in {:}",group.name.clone(),item.name,key_name_moved,obj)));
+                                        ""
+                                    }).to_string()
+                                }
+                            }
                         } else {
-                            
-                        }
+                            // Create the object
+                            let obj = rest.clone().obj_create(group.create_method.clone().unwrap_or(self.spec.client.create_method.clone().unwrap_or(CreateMethod::Post)), &path.as_str(),&values).unwrap_or_else(|e| {
+                                tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                                    recorder.publish(Event {
+                                        type_: EventType::Warning,
+                                        reason: format!("Failed creating: write.{}.{}",group.name.clone(),item.name),
+                                        note: Some(format!("{e}")),
+                                        action: "creating".into(),
+                                        secondary: None,
+                                    }).await.map_err(Error::KubeError).unwrap();
+                                })});
+                                conditions.push(ApplicationCondition::write_failed(&format!("Creating write.{}.{} raised {e}",group.name.clone(),item.name)));
+                                json!({})
+                            });
+                            let key_name_moved = key_name.clone();
+                            if obj[key_name.clone()].is_i64() {
+                                obj[key_name.clone()].as_i64().unwrap().to_string()
+                            } else if obj[key_name.clone()].is_u64() {
+                                obj[key_name.clone()].as_u64().unwrap().to_string()
+                            } else if obj[key_name.clone()].is_number() {
+                                obj[key_name.clone()].as_number().unwrap().to_string()
+                            } else {
+                                obj[key_name.clone()].as_str().unwrap_or_else(|| {
+                                    tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                                        recorder.publish(Event {
+                                            type_: EventType::Warning,
+                                            reason: format!("Failed creating: write.{}.{}",group.name.clone(),item.name),
+                                            note: Some(format!("{} not found in {:}",key_name_moved,obj)),
+                                            action: "creating".into(),
+                                            secondary: None,
+                                        }).await.map_err(Error::KubeError).unwrap();
+                                    })});
+                                    conditions.push(ApplicationCondition::write_failed(&format!("While creating write.{}.{} {} not found in {:}",group.name.clone(),item.name,key_name_moved,obj)));
+                                    ""
+                                }).to_string()
+                            }
+                        };
+                        target_new.push(OwnedRestPoint::new(
+                            path.as_str(),
+                            &key.as_str(),
+                            &group.name.as_str(),
+                            &item.name.as_str(),
+                            item.teardown.unwrap_or(group.teardown.unwrap_or(self.spec.client.teardown.unwrap_or(true)))
+                        ));
                     }
-                    let key = if self.owned_target().clone().into_iter().any(|t| t.group==group.name && t.name == item.name) {
-                        // TODO: Update the object
-                        let myself = self.owned_target().clone().into_iter().find(|t| t.group==group.name && t.name == item.name ).unwrap();
-                        let obj = rest.clone().obj_update(group.update_method.clone().unwrap_or(self.spec.client.update_method.clone().unwrap_or(UpdateMethod::Patch)), &path.as_str(), &myself.key,&values).unwrap_or_else(|e| {
-                            tokio::task::block_in_place(|| {Handle::current().block_on(async {
-                                recorder.publish(Event {
-                                    type_: EventType::Warning,
-                                    reason: format!("Failed updating: write.{}.{}",group.name.clone(),item.name),
-                                    note: Some(format!("{e}")),
-                                    action: "updating".into(),
-                                    secondary: None,
-                                }).await.map_err(Error::KubeError).unwrap();
-                            })});
-                            conditions.push(ApplicationCondition::write_failed(&format!("Updating write.{}.{} raised {e}",group.name.clone(),item.name)));
-                            json!({})
-                        });
-                        "todo".to_string()
-                    } else {
-                        // TODO : create the object
-                        "todo".to_string()
-                    };
-                    target_new.push(OwnedRestPoint::new(
-                        format!("{}/{}",self.spec.client.baseurl.clone(),group.path).as_str(),
-                        &key.as_str(),
-                        &group.name.as_str(),
-                        &item.name.as_str(),
-                        item.teardown.unwrap_or(group.teardown.unwrap_or(self.spec.client.teardown.unwrap_or(true)))
-                    ));
                 }
             }
         }
         // Delete old owned writes
         for old in self.owned_target().clone() {
             if old.teardown && ! target_new.clone().into_iter().any(|t| t.group==old.group && t.name==old.name) {
-                // TODO : delete that old object
+                rest.obj_delete(DeleteMethod::Delete, &old.path, &old.key).unwrap_or_else(|e| {
+                    target_new.push(old.clone());
+                    tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                        recorder.publish(Event {
+                            type_: EventType::Warning,
+                            reason: format!("Failed deleting: write.{}.{}",old.group,old.name),
+                            note: Some(format!("{e}")),
+                            action: "deleting".into(),
+                            secondary: None,
+                        }).await.map_err(Error::KubeError).unwrap();
+                    })});
+                    conditions.push(ApplicationCondition::write_delete_failed(&format!("Deleting write.{}.{} {e}",old.group,old.name).as_str()));
+                    json!({})
+                });
             }
         }
-
+        // Verify that all writes went OK
+        let cnd = conditions.clone();
+        if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing && c.condition_type!=ConditionsType::WriteAlreadyExist) {
+            let msg = "Some writes have failed";
+            conditions.push(ApplicationCondition::not_ready(msg));
+            let new_status = Patch::Apply(json!({
+                "apiVersion": "kuberest.solidite.fr/v1",
+                "kind": "RestEndPoint",
+                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: target_new }
+            }));
+            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+            return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
+        }
+        rhai.set_dynamic("write", &values["write"]);
+        rhai.set_dynamic("values", &values);
 
         // Run the post script
         if let Some(script) = self.spec.post.clone() {
+            let cnd = conditions.clone();
             values["post"] = rhai.eval(&script).unwrap_or_else(|e|{
                 conditions.push(ApplicationCondition::post_script_failed(&format!("{e}")));
                 futures::executor::block_on(async {
@@ -762,20 +883,6 @@ impl RestEndPoint {
             }
         }
 
-        // Verify that all writes went OK
-        if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing && c.condition_type!=ConditionsType::WriteAlreadyExist) {
-            let msg = "Some read have failed";
-            conditions.push(ApplicationCondition::not_ready(msg));
-            let new_status = Patch::Apply(json!({
-                "apiVersion": "kuberest.solidite.fr/v1",
-                "kind": "RestEndPoint",
-                "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: target_new }
-            }));
-            let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-            let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
-            return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
-        }
-        rhai.push_constant("write", &values["write"]);
 
         // Finally: handle Outputs
         let mut owned_new: Vec<OwnedObjects> = Vec::new();
@@ -974,10 +1081,207 @@ impl RestEndPoint {
         let name = self.name_any();
         let restendpoints: Api<RestEndPoint> = Api::namespaced(client, &ns);
         let mut conditions: Vec<ApplicationCondition> = Vec::new();
+        let mut values = serde_json::json!({"input":{},"pre":{}});
+        let mut hbs = HandleBars::new();
+        if let Some(templates)  = self.spec.templates.clone() {
+            for item in templates {
+                hbs.register_template(&item.name, &item.template).unwrap_or_else(|e| {
+                    tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                        recorder.publish(Event {
+                            type_: EventType::Warning,
+                            reason: format!("Failed register template: template.{}",item.name),
+                            note: Some(format!("{e}")),
+                            action: "registering".into(),
+                            secondary: None,
+                        }).await.map_err(Error::KubeError).unwrap();
+                    })});
+                    conditions.push(ApplicationCondition::template_failed(&format!("Registering template.{} raised {e}",item.name)));
+                });
+            }
+        }
+        let mut rhai = Script::new();
+        rhai.ctx.set_or_push("hbs", hbs.clone());
+        // Read the inputs first
+        if let Some(inputs) = self.spec.clone().inputs {
+            for input in inputs {
+                if let Some(secret) = input.secret_ref {
+                    let my_ns = if std::env::var("MULTI_TENANT").unwrap_or_else(|_| "true".to_string()).to_lowercase() == "true".to_string() {
+                        if secret.namespace.is_some() {
+                            recorder.publish(Event {
+                                type_: EventType::Warning,
+                                reason: "IgnoredNamespace".into(),
+                                note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
+                                action: "readingInput".into(),
+                                secondary: None,
+                            }).await.map_err(Error::KubeError)?;
+                        }
+                        ns.clone()
+                    } else if let Some(local_ns) = secret.namespace { local_ns } else { ns.clone() };
+                    let mut secrets = SecretHandler::new(&ctx.client.clone(), &my_ns);
+                    if secrets.have(&secret.name).await {
+                        let my_secret = secrets.get(&secret.name).await.unwrap();
+                        values["input"][input.name] = serde_json::json!({
+                            "metadata": my_secret.metadata,
+                            "data": my_secret.data
+                        });
+                    } else if secret.optional.unwrap_or(false) {
+                        recorder.publish(Event {
+                            type_: EventType::Normal,
+                            reason: "IgnoredInput".into(),
+                            note: Some(format!("Ignoring not found secret for Input '{}'",input.name)),
+                            action: "readingInput".into(),
+                            secondary: None,
+                        }).await.map_err(Error::KubeError)?;
+                        conditions.push(ApplicationCondition::input_missing(&format!("Input '{}' Secret {}.{} not found",input.name,my_ns,secret.name)));
+                        values["input"][input.name] = serde_json::json!({});
+                    } else {
+                        recorder.publish(Event {
+                            type_: EventType::Normal,
+                            reason: "MissingSecret".into(),
+                            note: Some(format!("Secret '{}' not found for Input '{}'",secret.name, input.name)),
+                            action: "readingInput".into(),
+                            secondary: None,
+                        }).await.map_err(Error::KubeError)?;
+                        conditions.push(ApplicationCondition::input_failed(&format!("Input '{}' Secret {}.{} not found",input.name,my_ns,secret.name)));
+                    }
+                } else if let Some(cfgmap) = input.config_map_ref {
+                    let my_ns = if std::env::var("MULTI_TENANT").unwrap_or_else(|_| "true".to_string()).to_lowercase() == "true".to_string() {
+                        if cfgmap.namespace.is_some() {
+                            recorder.publish(Event {
+                                type_: EventType::Warning,
+                                reason: "IgnoredNamespace".into(),
+                                note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
+                                action: "readingInput".into(),
+                                secondary: None,
+                            }).await.map_err(Error::KubeError)?;
+                        }
+                        ns.clone()
+                    } else if let Some(local_ns) = cfgmap.namespace { local_ns } else { ns.clone() };
+                    let mut maps = ConfigMapHandler::new(&ctx.client.clone(), &my_ns);
+                    if maps.have(&cfgmap.name).await {
+                        let my_cfg = maps.get(&cfgmap.name).await.unwrap();
+                        values["input"][input.name] = serde_json::json!({
+                            "metadata": my_cfg.metadata,
+                            "data": my_cfg.data,
+                            "binaryData": my_cfg.binary_data
+                        });
+                    } else if cfgmap.optional.unwrap_or(false) {
+                        recorder.publish(Event {
+                            type_: EventType::Normal,
+                            reason: "IgnoredInput".into(),
+                            note: Some(format!("Ignoring not found ConfigMap for Input '{}'",input.name)),
+                            action: "readingInput".into(),
+                            secondary: None,
+                        }).await.map_err(Error::KubeError)?;
+                        conditions.push(ApplicationCondition::input_missing(&format!("Input '{}' ConfigMap {}.{} not found",input.name,my_ns,cfgmap.name)));
+                        values["input"][input.name] = serde_json::json!({});
+                    } else {
+                        recorder.publish(Event {
+                            type_: EventType::Normal,
+                            reason: "MissingConfigMap".into(),
+                            note: Some(format!("ConfigMap '{}' not found for Input '{}'",cfgmap.name, input.name)),
+                            action: "readingInput".into(),
+                            secondary: None,
+                        }).await.map_err(Error::KubeError)?;
+                        conditions.push(ApplicationCondition::input_failed(&format!("Input '{}' ConfigMap {}.{} not found",input.name,my_ns,cfgmap.name)));
+                    }
+                } else if let Some(render) = input.handle_bars_render {
+                    values["input"][input.name] = json!(template!(render.as_str(),hbs,&values,conditions,recorder));
+                } else if let Some(password_def) = input.password_generator {
+                    values["input"][input.name] = json!(Passwords::new().generate(
+                        password_def.length.unwrap_or(32),
+                        password_def.weight_alphas.unwrap_or(60),
+                        password_def.weight_numbers.unwrap_or(20),
+                        password_def.weight_symbols.unwrap_or(20)
+                    ));
+                } else {
+                    recorder.publish(Event {
+                        type_: EventType::Warning,
+                        reason: "EmptyInput".into(),
+                        note: Some(format!("Input '{}' have no source",input.name)),
+                        action: "Fail".into(),
+                        secondary: None,
+                    }).await.map_err(Error::KubeError)?;
+                    conditions.push(ApplicationCondition::input_failed(&format!("Input '{}' have no source",input.name)));
+                    conditions.push(ApplicationCondition::not_ready(&format!("Input '{}' have no source",input.name)));
+                    let new_status = Patch::Apply(json!({
+                        "apiVersion": "kuberest.solidite.fr/v1",
+                        "kind": "RestEndPoint",
+                        "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+                    }));
+                    let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+                    let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+                    return Err(Error::IllegalRestEndPoint);
+                }
+            }
+        }
+        rhai.set_dynamic("input", &values["input"]);
+        rhai.set_dynamic("values", &values);
+        // Setup the httpClient
+        let mut rest = RestClient::new(self.spec.client.baseurl.clone().as_str());
+        if let Some(headers) = self.spec.client.headers.clone() {
+            for (key,value) in headers {
+                rest.add_header(&template!(key.as_str(),hbs,&values,conditions,recorder), &template!(value.as_str(),hbs,&values,conditions,recorder));
+            }
+        }
+        rest.add_header_json();
+        rhai.ctx.set_or_push("client", rest.clone());
+
         let mut owned_new: Vec<OwnedObjects> = Vec::new();
         let mut target_new: Vec<OwnedRestPoint> = Vec::new();
 
-        // TODO: delete writes
+        // Start the teardown script
+        if let Some(script) = self.spec.teardown.clone() {
+            let cnd = conditions.clone();
+            rhai.eval(&script).unwrap_or_else(|e|{
+                conditions.push(ApplicationCondition::post_script_failed(&format!("{e}")));
+                futures::executor::block_on(async {
+                    recorder.publish(Event {
+                        type_: EventType::Warning,
+                        reason: "post-script failed".into(),
+                        note: Some(format!("post-script failed with: {e}")),
+                        action: "post-script".into(),
+                        secondary: None,
+                    }).await.map_err(Error::KubeError).unwrap();
+                });
+                json!({})
+            });
+            // Validate that teardown went Ok
+            if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
+                let msg = "Teardown failed";
+                conditions.push(ApplicationCondition::not_ready(msg));
+                let new_status = Patch::Apply(json!({
+                    "apiVersion": "kuberest.solidite.fr/v1",
+                    "kind": "RestEndPoint",
+                    "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+                }));
+                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+                let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+                return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
+            }
+        }
+
+        // Delete writes
+        if let Some(status) = self.status.clone() {
+            for obj in status.owned_target {
+                if obj.teardown {
+                    rest.obj_delete(DeleteMethod::Delete, &obj.path, &obj.key).unwrap_or_else(|e| {
+                        target_new.push(obj.clone());
+                        tokio::task::block_in_place(|| {Handle::current().block_on(async {
+                            recorder.publish(Event {
+                                type_: EventType::Warning,
+                                reason: format!("Failed deleting: write.{}.{}",obj.group,obj.name),
+                                note: Some(format!("{e}")),
+                                action: "deleting".into(),
+                                secondary: None,
+                            }).await.map_err(Error::KubeError).unwrap();
+                        })});
+                        conditions.push(ApplicationCondition::write_delete_failed(&format!("Deleting write.{}.{} {e}",obj.group.as_str(),obj.name.as_str()).as_str()));
+                        json!({})
+                    });
+                }
+            }
+        }
 
         // Delete owned objects
         if let Some(status) = self.status.clone() {

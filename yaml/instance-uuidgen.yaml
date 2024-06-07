@@ -12,14 +12,21 @@ spec:
   - name: uuid
     handleBarsRender: "{{ uuid_new_v7 }}"
   - name: other
-    handleBarsRender: "{{#if input.output.data.other }}{{ base64_decode input.output.data.other }}{{else}}{{ uuid_new_v7 }}{{/if}}"
+    handleBarsRender: "{{> uuidfrom input.output.data.other }}"
   - name: password
     passwordGenerator: {}
   - name: weak
     passwordGenerator:
       length: 8
       weightSymbols: 0
+  - name: hbsweak
+    handleBarsRender: "{{ gen_password_alphanum 8 }}"
+  - name: hbspassword
+    handleBarsRender: "{{ gen_password 32 }}"
   templates:
+  - name: uuidfrom
+    template: >-
+      {{#if this }}{{ base64_decode this }}{{else}}{{ uuid_new_v7 }}{{/if}}
   - name: uuid
     template: >-
       {{#if input.output.data.uuid }}{{ base64_decode input.output.data.uuid }}{{else}}{{ input.uuid }}{{/if}}
@@ -44,3 +51,5 @@ spec:
       change_every_chech_too: "{{> uuidgen }}"
       password: "{{> password }}"
       weak: "{{ input.weak }}"
+      hbsweak: "{{ input.hbsweak }}"
+      hbspassword: "{{ input.hbspassword }}"

@@ -1,0 +1,32 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: create-gitlab-hook
+spec:
+  inputs:
+  - name: token
+    secretRef:
+      name: token
+  - name: projectid
+    handleBarsRender: "{{ base64_decode input.token.data.project_id }}"
+  templates:
+  - name: token
+    template: "{{ base64_decode input.token.data.gitlab_token }}"
+  - name: hook
+    template: |-
+      id: "{{ name }}"
+      name: "{{ name }}"
+      description: "{{ name }} awesome hook"
+      url: "https://some.url.on.the.net/my/hook"
+  client:
+    baseurl: "https://gitlab.com/api/v4"
+    updateMethod: Put
+    headers:
+      Authorization: "Bearer {{> token }}"
+  writes:
+  - name: hook
+    path: "projects/{{ input.projectid }}/hooks"
+    items:
+    - name: test
+      values: |-
+        {{> hook name="test" }}

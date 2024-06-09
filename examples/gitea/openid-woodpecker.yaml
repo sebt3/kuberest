@@ -1,7 +1,7 @@
 apiVersion: kuberest.solidite.fr/v1
 kind: RestEndPoint
 metadata:
-  name: gitea-woodpecker
+  name: openid-woodpecker
 spec:
   inputs:
   - name: output

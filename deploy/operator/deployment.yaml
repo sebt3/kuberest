@@ -8,7 +8,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/version: "0.9.0"
 spec:
   podSelector:
     matchLabels:
@@ -58,7 +58,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/version: "0.9.0"
   namespace: default
 automountServiceAccountToken: true
 ---
@@ -73,8 +73,8 @@ rules:
     resources: ["restendpoints", "restendpoints/status", "restendpoints/finalizers"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: [""]
-    resources: ["Secret", "ConfigMap"]
-    verbs: ["get", "list", "watch", "patch", "update"]
+    resources: ["secrets", "configmaps"]
+    verbs: ["*"]
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create"]
@@ -104,7 +104,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/version: "0.9.0"
 spec:
   type: ClusterIP
   ports:
@@ -124,7 +124,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/version: "0.9.0"
 spec:
   replicas: 1
   selector:
@@ -142,7 +142,7 @@ spec:
         {}
       containers:
       - name: kuberest
-        image: sebt3/kuberest:1.0.0
+        image: sebt3/kuberest:0.9.0
         imagePullPolicy: IfNotPresent
         securityContext:
           {}

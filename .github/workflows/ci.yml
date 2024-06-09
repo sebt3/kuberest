@@ -9,11 +9,13 @@ on:
       - '*'
 
 jobs:
-  docker-base:
+  docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
+      # Setup qemu for multi-arch support
+      - name: Docker Setup qemu-action
+        uses: docker/setup-qemu-action@v2
       # Build and push with docker buildx
       - name: Setup docker buildx
         uses: docker/setup-buildx-action@v2
@@ -24,7 +26,8 @@ jobs:
         with:
           images: ${{ github.repository_owner }}/kuberest
           tags: |
-            type=pep440,pattern={{version}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=pr
 
@@ -35,27 +38,7 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: musl-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Compile base features
-        run: |
-          mkdir -p ~/.cargo/{git,registry}
-          docker run --rm -t \
-              --mount type=bind,source=${{ github.workspace }},target=/volume \
-              --mount type=bind,source=$HOME/.cargo/registry,target=/root/.cargo/registry \
-              --mount type=bind,source=$HOME/.cargo/git,target=/root/.cargo/git \
-              clux/muslrust:stable \
-              cargo build --release --bin controller
-          cp target/x86_64-unknown-linux-musl/release/controller .
-
-      - name: Docker buildx and push with base features
+      - name: Docker buildx
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -64,7 +47,7 @@ jobs:
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
 
       - name: Persist base image build to a tarball
         uses: docker/build-push-action@v4
@@ -81,44 +64,27 @@ jobs:
           name: controller-image
           path: /tmp/image.tar
 
-  docker-otel:
+  otel-docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
+      # Setup qemu for multi-arch support
+      - name: Docker Setup qemu-action
+        uses: docker/setup-qemu-action@v2
       # Build and push with docker buildx
       - name: Setup docker buildx
         uses: docker/setup-buildx-action@v2
 
-      - name: Configure tags based on git tags for otel
+      - name: Configure tags based on git tags + latest
         uses: docker/metadata-action@v4
         id: meta
         with:
           images: ${{ github.repository_owner }}/kuberest
           tags: |
-            type=pep440,pattern={{version}},prefix=otel-
-            type=raw,value=otel,enable={{is_default_branch}}
-            type=ref,event=pr,prefix=otel-
-
-      - uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: musl-cargo-otel-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Compile with telemetry
-        run: |
-          mkdir -p ~/.cargo/{git,registry}
-          docker run --rm -t \
-              --mount type=bind,source=${{ github.workspace }},target=/volume \
-              --mount type=bind,source=$HOME/.cargo/registry,target=/root/.cargo/registry \
-              --mount type=bind,source=$HOME/.cargo/git,target=/root/.cargo/git \
-              clux/muslrust:stable \
-              cargo build --features=telemetry --release --bin controller
-          cp target/x86_64-unknown-linux-musl/release/controller .
+            type=semver,pattern={{version}},prefix=otel-
+            type=semver,pattern={{major}}.{{minor}},prefix=otel-
+            type=raw,value=otel-latest,enable={{is_default_branch}}
+            type=ref,event=pr
 
       - name: Docker login on main origin
         uses: docker/login-action@v2
@@ -127,7 +93,7 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Docker buildx and push with telemetry
+      - name: Docker buildx
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -136,11 +102,13 @@ jobs:
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            FEATURES=--features=telemetry
 
   e2e:
     runs-on: ubuntu-latest
-    needs: [docker-base]
+    needs: [docker]
     steps:
       - uses: actions/checkout@v3
       - uses: nolar/setup-k3d-k3s@v1
@@ -148,7 +116,7 @@ jobs:
           version: v1.27
           k3d-name: kube
           k3d-args: "--no-lb --no-rollback --k3s-arg --disable=traefik,servicelb,metrics-server@server:*"
-      - run: kubectl apply -f yaml/crd.yaml
+      - run: kubectl apply -k deploy/crd
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
       - name: Download docker image artifact from docker job
@@ -161,19 +129,21 @@ jobs:
       - name: helm template | kubctl apply
         run: |
           apiserver="$(kubectl get endpoints kubernetes -ojson | jq '.subsets[0].addresses[0].ip' -r)"
-          helm template charts/doc-controller \
+          helm template charts/kuberest \
             --set version=latest \
             --set networkPolicy.enabled=true \
             --set networkPolicy.apiserver.0=${apiserver}/32 \
             | kubectl apply -f -
-      - run: kubectl wait --for=condition=available deploy/doc-controller --timeout=30s
-      - run: kubectl apply -f yaml/instance-samuel.yaml
-      - run: sleep 2 # TODO: add condition on status and wait for it instead
+      - run: kubectl wait --for=condition=available deploy/kuberest --timeout=30s
+      - run: kubectl apply -f examples/abuses/uuidgen.yaml
+      - run: kubectl wait --for=condition=ready rep/uuidgen
       # verify reconcile actions have happened
-      - run: kubectl get netpol doc-controller -oyaml
-      - run: kubectl logs deploy/doc-controller
-      - run: kubectl get event --field-selector "involvedObject.kind=Document,involvedObject.name=samuel" | grep "HideRequested"
-      - run: kubectl get doc -oyaml | grep -A1 finalizers | grep restpaths.kuberest.solidite.fr
+      - run: kubectl get netpol kuberest -oyaml
+      - run: kubectl logs deploy/kuberest
+      - run: kubectl get event --field-selector "involvedObject.kind=RestEndPoint,involvedObject.name=uuidgen" | grep "IgnoredInput"
+      - run: kubectl get secrets output
+      - run: kubectl get rep -oyaml | grep -A1 finalizers | grep restendpoints.kuberest.solidite.fr
+      # TODO: add more e2e tests
 
   lint:
     runs-on: ubuntu-latest
@@ -224,16 +194,16 @@ jobs:
       # Real CI work starts here
       - name: Build workspace
         run: cargo build
-      - name: Run workspace unit tests
-        run: cargo test
       - name: Generate crd.yaml
         run: cargo run --bin crdgen > deploy/crd/crd.yaml
       - name: Generate deployment.yaml
         run: helm template charts/kuberest > deploy/operator/deployment.yaml
       - name: Ensure generated output is committed
         run: |
-          if ! git diff --exit-code yaml/; then
+          if ! git diff --exit-code deploy/; then
               echo "Uncommitted changes in yaml directory"
-              echo "Please run 'just generate' and commit the results"
+              echo "Please run 'cargo cmd generate' and commit the results"
               exit 1
           fi
+      - name: Run workspace unit tests
+        run: cargo test

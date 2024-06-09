@@ -1,4 +1,4 @@
-use crate::{RestEndPoint, Error};
+use crate::{Error, RestEndPoint};
 use kube::ResourceExt;
 use prometheus::{histogram_opts, opts, HistogramVec, IntCounter, IntCounterVec, Registry};
 use tokio::time::Instant;

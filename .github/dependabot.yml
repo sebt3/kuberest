@@ -12,3 +12,4 @@ updates:
     schedule:
       interval: "weekly"
     labels:
+      - "cargo"

@@ -1,0 +1,46 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: set-all-projects-merge-method
+spec:
+  inputs:
+  - name: token
+    secretRef:
+      name: token
+  - name: config
+    handleBarsRender: |-
+      {{#to_json format="yaml"}}
+      merge_method: ff
+      issues_enabled: false
+      {{/to_json}}
+  client:
+    baseurl: "https://gitlab.com/api/v4"
+    headers:
+      Authorization: "Bearer {{ base64_decode input.token.data.gitlab_token }}"
+  reads:
+  - name: projects
+    path: "users/{{ base64_decode input.token.data.user_id }}/projects"
+    items:
+    - name: list
+      key: ""
+  post: |-
+    let results=[];
+    for id in read.projects.list.map(|p| p.id) {
+      results += client.http_put("projects/"+id", input.config);
+    }
+    #{
+      results: results.map(|r| #{
+        code: r.code,
+        id: r.json.id,
+        name: r.json.name
+      })
+    }
+
+  # outputs:
+  # - kind: ConfigMap
+  #   metadata:
+  #     name: set-all-projects-merge-method
+  #   data:
+  #     result.yaml: |-
+  #       ---
+  #       {{ json_to_str post.results format="yaml" }}

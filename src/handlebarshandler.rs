@@ -19,7 +19,7 @@ handlebars_helper!(base64_encode: |arg:Value| STANDARD.encode(arg.as_str().unwra
     warn!("handlebars::base64_encode received a non-string parameter: {:}",arg);
     ""
 }).to_string()));
-handlebars_helper!(header_basic: |username:Value,password:Value| STANDARD.encode(format!("{}:{}",username.as_str().unwrap_or_else(|| {
+handlebars_helper!(header_basic: |username:Value,password:Value| STANDARD.encode(format!("Basic {}:{}",username.as_str().unwrap_or_else(|| {
     warn!("handlebars::header_basic received a non-string username: {:}",username);
     ""
 }),password.as_str().unwrap_or_else(|| {
@@ -55,7 +55,7 @@ impl HandleBars<'_> {
     pub fn render(&mut self, template: &str, data: &Value) -> std::result::Result<String, handlebars::RenderError> {
         self.engine.render_template(template, data)
     }
-    pub fn render_from_rhai(&mut self, template: String, data: Value) -> String {
+    pub fn render_from_rhai(&mut self, template: String, data: rhai::Map) -> String {
         self.engine.render_template(template.as_str(), &data).unwrap()
     }
 }

@@ -22,6 +22,10 @@ spec:
           spec:
             description: Describe the specification of a RestEndPoint
             properties:
+              change:
+                description: A rhai intermediate script to handle url change, or basic-to-token authentification method transition
+                nullable: true
+                type: string
               checkFrequency:
                 description: 'checkFrequency define the pooling interval (in seconds, default: 300)'
                 format: uint64

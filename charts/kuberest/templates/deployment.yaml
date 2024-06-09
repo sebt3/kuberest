@@ -47,6 +47,8 @@ spec:
         - name: OPENTELEMETRY_ENDPOINT_URL
           value: https://{{ .Values.tracing.service }}.{{ .Values.tracing.namespace }}.cluster.local:{{ .Values.tracing.port }}
         {{- end }}
+        - name: MULTI_TENANT
+          value: "{{ .Values.tenants.enabled }}"
         {{- with .Values.env }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

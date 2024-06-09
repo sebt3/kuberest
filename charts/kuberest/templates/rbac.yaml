@@ -23,7 +23,10 @@ metadata:
   name: {{ include "controller.fullname" . }}
 rules:
   - apiGroups: ["kuberest.solidite.fr"]
-    resources: ["documents", "documents/status", "documents/finalizers"]
+    resources: ["restendpoints", "restendpoints/status", "restendpoints/finalizers"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["Secret", "ConfigMap"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]

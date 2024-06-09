@@ -1,18 +1,18 @@
 ---
-# Source: doc-controller/templates/networkpolicy.yaml
+# Source: kuberest/templates/networkpolicy.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: doc-controller
+  name: kuberest
   namespace: default
   labels:
-    app: doc-controller
-    app.kubernetes.io/name: doc-controller
-    app.kubernetes.io/version: "0.12.11"
+    app: kuberest
+    app.kubernetes.io/name: kuberest
+    app.kubernetes.io/version: "1.0.0"
 spec:
   podSelector:
     matchLabels:
-      app: doc-controller
+      app: kuberest
   policyTypes:
   - Ingress
   - Egress
@@ -49,59 +49,62 @@ spec:
     - port: http
       protocol: TCP
 ---
-# Source: doc-controller/templates/rbac.yaml
+# Source: kuberest/templates/rbac.yaml
 # Scoped service account
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: doc-controller
+  name: kuberest
   labels:
-    app: doc-controller
-    app.kubernetes.io/name: doc-controller
-    app.kubernetes.io/version: "0.12.11"
+    app: kuberest
+    app.kubernetes.io/name: kuberest
+    app.kubernetes.io/version: "1.0.0"
   namespace: default
 automountServiceAccountToken: true
 ---
-# Source: doc-controller/templates/rbac.yaml
+# Source: kuberest/templates/rbac.yaml
 # Access for the service account
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: doc-controller
+  name: kuberest
 rules:
   - apiGroups: ["kuberest.solidite.fr"]
-    resources: ["documents", "documents/status", "documents/finalizers"]
+    resources: ["restendpoints", "restendpoints/status", "restendpoints/finalizers"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["Secret", "ConfigMap"]
     verbs: ["get", "list", "watch", "patch", "update"]
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create"]
 ---
-# Source: doc-controller/templates/rbac.yaml
+# Source: kuberest/templates/rbac.yaml
 # Binding the role to the account
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: doc-controller
+  name: kuberest
 subjects:
 - kind: ServiceAccount
   namespace: default
-  name: doc-controller
+  name: kuberest
 roleRef:
   kind: ClusterRole
-  name: doc-controller
+  name: kuberest
   apiGroup: rbac.authorization.k8s.io
 ---
-# Source: doc-controller/templates/service.yaml
+# Source: kuberest/templates/service.yaml
 # Expose the http port of the service
 apiVersion: v1
 kind: Service
 metadata:
-  name: doc-controller
+  name: kuberest
   namespace: default
   labels:
-    app: doc-controller
-    app.kubernetes.io/name: doc-controller
-    app.kubernetes.io/version: "0.12.11"
+    app: kuberest
+    app.kubernetes.io/name: kuberest
+    app.kubernetes.io/version: "1.0.0"
 spec:
   type: ClusterIP
   ports:
@@ -110,36 +113,36 @@ spec:
     protocol: TCP
     name: http
   selector:
-    app: doc-controller
+    app: kuberest
 ---
-# Source: doc-controller/templates/deployment.yaml
+# Source: kuberest/templates/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: doc-controller
+  name: kuberest
   namespace: default
   labels:
-    app: doc-controller
-    app.kubernetes.io/name: doc-controller
-    app.kubernetes.io/version: "0.12.11"
+    app: kuberest
+    app.kubernetes.io/name: kuberest
+    app.kubernetes.io/version: "1.0.0"
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: doc-controller
+      app: kuberest
   template:
     metadata:
       labels:
-        app: doc-controller
+        app: kuberest
       annotations:
-        kubectl.kubernetes.io/default-container: doc-controller
+        kubectl.kubernetes.io/default-container: kuberest
     spec:
-      serviceAccountName: doc-controller
+      serviceAccountName: kuberest
       securityContext:
         {}
       containers:
-      - name: doc-controller
-        image: clux/controller:0.12.11
+      - name: kuberest
+        image: sebt3/kuberest:1.0.0
         imagePullPolicy: IfNotPresent
         securityContext:
           {}
@@ -157,6 +160,8 @@ spec:
         env:
         - name: RUST_LOG
           value: info,kube=debug,controller=debug
+        - name: MULTI_TENANT
+          value: "true"
         readinessProbe:
           httpGet:
             path: /health

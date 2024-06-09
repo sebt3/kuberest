@@ -1,7 +1,7 @@
 apiVersion: kuberest.solidite.fr/v1
 kind: RestEndPoint
 metadata:
-  name: list-config
+  name: gen-config-from-get
 spec:
   inputs:
   - name: token

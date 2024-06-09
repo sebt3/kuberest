@@ -28,7 +28,7 @@ pub enum Error {
     JsonError(#[source] serde_json::Error),
 
     #[error("{0} query failed: {1}")]
-    MethodFailed(String,String),
+    MethodFailed(String, u16, String),
 
     #[error("Unsupported method")]
     UnsupportedMethod,

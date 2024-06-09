@@ -1,0 +1,35 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: gitea-woodpecker
+spec:
+  inputs:
+  - name: output
+    secretRef:
+      optional: true
+      name: woodpecker-gitea-openid
+  - name: admin
+    secretRef:
+      name: gitea-admin-user
+  client:
+    baseurl: "https://gitea.your-company.com/api/v1"
+    headers:
+      Authorization: "{{ header_basic (base64_decode input.admin.data.username) (base64_decode input.admin.data.password) }}"
+  writes:
+  - name: application
+    path: user/applications/oauth2
+    items:
+    - name: woodpecker
+      values: |-
+        confidential_client: true
+        name: woodpecker
+        redirect_uris:
+        - "https://woodpecker.your-company.com/authorize"
+  outputs:
+  - kind: Secret
+    metadata:
+      name: woodpecker-gitea-openid
+    data:
+      WOODPECKER_GITEA_CLIENT: "{{ write.application.woodpecker.client_id }}"
+      # Since gitea only give the secret once, keep the value from the initial create in the secret
+      WOODPECKER_GITEA_SECRET: "{{#if input.output.data.WOODPECKER_GITEA_SECRET }}{{ base64_decode input.output.data.WOODPECKER_GITEA_SECRET }}{{else}}{{ write.application.woodpecker.client_secret }}{{/if}}"

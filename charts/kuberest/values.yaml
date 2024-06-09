@@ -50,6 +50,10 @@ networkPolicy:
 logging:
   env_filter: info,kube=debug,controller=debug
 
+# set to false if you want to use Secrets across-namespaces (unsafe in a multi-tenants cluster)
+tenants:
+  enabled: true
+
 env: []
 
 service:

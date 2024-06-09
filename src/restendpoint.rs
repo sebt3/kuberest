@@ -351,6 +351,8 @@ pub struct RestEndPointSpec {
     pub pre: Option<String>,
     /// Allow to read some pre-existing objects
     pub reads: Option<Vec<ReadGroup>>,
+    /// A rhai intermediate script to handle url change, or basic-to-token authentification method transition
+    pub change: Option<String>,
     /// Sub-paths to the client. Allow to describe the objects to create on the end-point
     pub writes: Option<Vec<WriteGroup>>,
     /// A rhai post-script for final validation if any
@@ -392,7 +394,7 @@ async fn reconcile(rest_path: Arc<RestEndPoint>, ctx: Arc<Context>) -> Result<Ac
     let ns = rest_path.namespace().unwrap();
     let paths: Api<RestEndPoint> = Api::namespaced(ctx.client.clone(), &ns);
 
-    debug!("Reconciling RestEndPoint \"{}\" in {}", rest_path.name_any(), ns);
+    info!("Reconciling RestEndPoint \"{}\" in {}", rest_path.name_any(), ns);
     finalizer(&paths, RESTPATH_FINALIZER, rest_path, |event| async {
         match event {
             Finalizer::Apply(rest_path) => rest_path.reconcile(ctx.clone()).await,
@@ -692,7 +694,38 @@ impl RestEndPoint {
         rhai.set_dynamic("read", &values["read"]);
         rhai.set_dynamic("values", &values);
 
-        // TODO: Handle each Writes
+        // Run the change script
+        if let Some(script) = self.spec.change.clone() {
+            let cnd = conditions.clone();
+            values["change"] = rhai.eval(&script).unwrap_or_else(|e|{
+                conditions.push(ApplicationCondition::post_script_failed(&format!("{e}")));
+                futures::executor::block_on(async {
+                    recorder.publish(Event {
+                        type_: EventType::Warning,
+                        reason: "change-script failed".into(),
+                        note: Some(format!("change-script failed with: {e}")),
+                        action: "change-script".into(),
+                        secondary: None,
+                    }).await.map_err(Error::KubeError).unwrap();
+                });
+                json!({})
+            });
+            // Validate that change-script went Ok
+            if cnd.iter().any(|c| c.condition_type!=ConditionsType::InputMissing) {
+                let msg = "Change-script failed";
+                conditions.push(ApplicationCondition::not_ready(msg));
+                let new_status = Patch::Apply(json!({
+                    "apiVersion": "kuberest.solidite.fr/v1",
+                    "kind": "RestEndPoint",
+                    "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+                }));
+                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+                let _o = restendpoints.patch_status(&name, &ps, &new_status).await.map_err(Error::KubeError)?;
+                return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
+            }
+        }
+
+        // Handle each Writes
         let mut target_new: Vec<OwnedRestPoint> = Vec::new();
         if let Some(writes) = self.spec.writes.clone() {
             for group in writes {
@@ -701,7 +734,7 @@ impl RestEndPoint {
                 let path = template!(group.path.as_str(),hbs,&values,conditions,recorder);
                 for item in group.items {
                     let cur_len = conditions.len();
-                    let values = serde_yaml::from_str(template!(item.values.as_str(),hbs,&values,conditions,recorder).as_str()).unwrap_or_else(|e|{
+                    let vals = serde_yaml::from_str(template!(item.values.as_str(),hbs,&values,conditions,recorder).as_str()).unwrap_or_else(|e|{
                         tokio::task::block_in_place(|| {Handle::current().block_on(async {
                             recorder.publish(Event {
                                 type_: EventType::Warning,
@@ -714,9 +747,10 @@ impl RestEndPoint {
                         conditions.push(ApplicationCondition::write_failed(&format!("Templating write.{}.{}.values raised {e}",group.name.clone(),item.name)));
                         json!({})
                     });
+                    let mut giveup= false;
                     if conditions.len() == cur_len {
                         let key = if self.owned_target().clone().into_iter().any(|t| t.group==group.name && t.name == item.name) {
-                            // TODO: Update the object
+                            // Update the object
                             let myself = self.owned_target().clone().into_iter().find(|t| t.group==group.name && t.name == item.name ).unwrap();
                             if myself.key.is_empty() {
                                 tokio::task::block_in_place(|| {Handle::current().block_on(async {
@@ -731,7 +765,8 @@ impl RestEndPoint {
                                 conditions.push(ApplicationCondition::write_failed(&format!("Will *not* update write.{}.{} with an empty key",group.name.clone(),item.name)));
                                 "".to_string()
                             } else {
-                                let obj = rest.clone().obj_update(group.update_method.clone().unwrap_or(self.spec.client.update_method.clone().unwrap_or(UpdateMethod::Patch)), &path.as_str(), &myself.key,&values).unwrap_or_else(|e| {
+                                let obj = rest.clone().obj_update(group.update_method.clone().unwrap_or(self.spec.client.update_method.clone().unwrap_or(UpdateMethod::Patch)), &path.as_str(), &myself.key,&vals).unwrap_or_else(|e| {
+                                    giveup = if let Error::MethodFailed(_,code,_) = e {code==404} else {false};
                                     tokio::task::block_in_place(|| {Handle::current().block_on(async {
                                         recorder.publish(Event {
                                             type_: EventType::Warning,
@@ -744,6 +779,7 @@ impl RestEndPoint {
                                     conditions.push(ApplicationCondition::write_failed(&format!("Updating write.{}.{} raised {e}",group.name.clone(),item.name)));
                                     json!({})
                                 });
+                                values["write"][group.name.clone()][item.name.clone()] = obj.clone();
                                 let key_name_moved = key_name.clone();
                                 if obj[key_name.clone()].is_i64() {
                                     obj[key_name.clone()].as_i64().unwrap().to_string()
@@ -757,19 +793,19 @@ impl RestEndPoint {
                                             recorder.publish(Event {
                                                 type_: EventType::Warning,
                                                 reason: format!("Failed updating: write.{}.{}",group.name.clone(),item.name),
-                                                note: Some(format!("{} not found in {:}",&key_name_moved,obj)),
+                                                note: Some(format!("{} is neither a number or a string in {:}",&key_name_moved,obj)),
                                                 action: "updating".into(),
                                                 secondary: None,
                                             }).await.map_err(Error::KubeError).unwrap();
                                         })});
-                                        conditions.push(ApplicationCondition::write_failed(&format!("While updating write.{}.{} {} not found in {:}",group.name.clone(),item.name,key_name_moved,obj)));
+                                        conditions.push(ApplicationCondition::write_failed(&format!("While updating write.{}.{} {} is neither a number or a string in {:}",group.name.clone(),item.name,key_name_moved,obj)));
                                         ""
                                     }).to_string()
                                 }
                             }
                         } else {
                             // Create the object
-                            let obj = rest.clone().obj_create(group.create_method.clone().unwrap_or(self.spec.client.create_method.clone().unwrap_or(CreateMethod::Post)), &path.as_str(),&values).unwrap_or_else(|e| {
+                            let obj = rest.clone().obj_create(group.create_method.clone().unwrap_or(self.spec.client.create_method.clone().unwrap_or(CreateMethod::Post)), &path.as_str(),&vals).unwrap_or_else(|e| {
                                 tokio::task::block_in_place(|| {Handle::current().block_on(async {
                                     recorder.publish(Event {
                                         type_: EventType::Warning,
@@ -782,6 +818,7 @@ impl RestEndPoint {
                                 conditions.push(ApplicationCondition::write_failed(&format!("Creating write.{}.{} raised {e}",group.name.clone(),item.name)));
                                 json!({})
                             });
+                            values["write"][group.name.clone()][item.name.clone()] = obj.clone();
                             let key_name_moved = key_name.clone();
                             if obj[key_name.clone()].is_i64() {
                                 obj[key_name.clone()].as_i64().unwrap().to_string()
@@ -795,23 +832,25 @@ impl RestEndPoint {
                                         recorder.publish(Event {
                                             type_: EventType::Warning,
                                             reason: format!("Failed creating: write.{}.{}",group.name.clone(),item.name),
-                                            note: Some(format!("{} not found in {:}",key_name_moved,obj)),
+                                            note: Some(format!("{} is neither a number or a string in {:}",key_name_moved,obj)),
                                             action: "creating".into(),
                                             secondary: None,
                                         }).await.map_err(Error::KubeError).unwrap();
                                     })});
-                                    conditions.push(ApplicationCondition::write_failed(&format!("While creating write.{}.{} {} not found in {:}",group.name.clone(),item.name,key_name_moved,obj)));
+                                    conditions.push(ApplicationCondition::write_failed(&format!("While creating write.{}.{} {} is neither a number or a string in {:}",group.name.clone(),item.name,key_name_moved,obj)));
                                     ""
                                 }).to_string()
                             }
                         };
-                        target_new.push(OwnedRestPoint::new(
-                            path.as_str(),
-                            &key.as_str(),
-                            &group.name.as_str(),
-                            &item.name.as_str(),
-                            item.teardown.unwrap_or(group.teardown.unwrap_or(self.spec.client.teardown.unwrap_or(true)))
-                        ));
+                        if ! giveup {
+                            target_new.push(OwnedRestPoint::new(
+                                path.as_str(),
+                                &key.as_str(),
+                                &group.name.as_str(),
+                                &item.name.as_str(),
+                                item.teardown.unwrap_or(group.teardown.unwrap_or(self.spec.client.teardown.unwrap_or(true)))
+                            ));
+                        }
                     }
                 }
             }
@@ -820,7 +859,13 @@ impl RestEndPoint {
         for old in self.owned_target().clone() {
             if old.teardown && ! target_new.clone().into_iter().any(|t| t.group==old.group && t.name==old.name) {
                 rest.obj_delete(DeleteMethod::Delete, &old.path, &old.key).unwrap_or_else(|e| {
+                let giveup = if let Error::MethodFailed(_,code,_) = e {code==404} else {false};
+                // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
+                if ! self.spec.client.teardown.clone().unwrap_or(false) && !giveup {
                     target_new.push(old.clone());
+                    conditions.push(ApplicationCondition::write_delete_failed(&format!("Deleting write.{}.{} {e}",old.group.as_str(),old.name.as_str()).as_str()));
+                }
+                target_new.push(old.clone());
                     tokio::task::block_in_place(|| {Handle::current().block_on(async {
                         recorder.publish(Event {
                             type_: EventType::Warning,
@@ -830,7 +875,6 @@ impl RestEndPoint {
                             secondary: None,
                         }).await.map_err(Error::KubeError).unwrap();
                     })});
-                    conditions.push(ApplicationCondition::write_delete_failed(&format!("Deleting write.{}.{} {e}",old.group,old.name).as_str()));
                     json!({})
                 });
             }
@@ -882,7 +926,6 @@ impl RestEndPoint {
                 return Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))));
             }
         }
-
 
         // Finally: handle Outputs
         let mut owned_new: Vec<OwnedObjects> = Vec::new();
@@ -1070,6 +1113,7 @@ impl RestEndPoint {
         }
         Ok(Action::requeue(Duration::from_secs(self.spec.check_frequency.clone().unwrap_or(15*60))))
     }
+
 
     // Finalizer cleanup (the object was deleted, ensure nothing is orphaned)
     async fn cleanup(&self, ctx: Arc<Context>) -> Result<Action> {
@@ -1264,9 +1308,14 @@ impl RestEndPoint {
         // Delete writes
         if let Some(status) = self.status.clone() {
             for obj in status.owned_target {
-                if obj.teardown {
+                if obj.teardown && ! obj.key.is_empty() {
                     rest.obj_delete(DeleteMethod::Delete, &obj.path, &obj.key).unwrap_or_else(|e| {
-                        target_new.push(obj.clone());
+                        let giveup = if let Error::MethodFailed(_,code,_) = e {code==404} else {false};
+                        // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
+                        if ! self.spec.client.teardown.clone().unwrap_or(false) && !giveup {
+                            target_new.push(obj.clone());
+                            conditions.push(ApplicationCondition::write_delete_failed(&format!("Deleting write.{}.{} {e}",obj.group.as_str(),obj.name.as_str()).as_str()));
+                        }
                         tokio::task::block_in_place(|| {Handle::current().block_on(async {
                             recorder.publish(Event {
                                 type_: EventType::Warning,
@@ -1276,7 +1325,6 @@ impl RestEndPoint {
                                 secondary: None,
                             }).await.map_err(Error::KubeError).unwrap();
                         })});
-                        conditions.push(ApplicationCondition::write_delete_failed(&format!("Deleting write.{}.{} {e}",obj.group.as_str(),obj.name.as_str()).as_str()));
                         json!({})
                     });
                 }
@@ -1324,6 +1372,10 @@ impl RestEndPoint {
             }
         }
         if conditions.len()>0 || owned_new.len()>0 || target_new.len()>0 {
+            // Wait 30s before reporting the failure, because the controller keeps trying and it might hammer the api-server and the api-endpoint targeted otherwise. Beside the events generated already informed the user of the issue
+            tokio::task::block_in_place(|| {tokio::runtime::Handle::current().block_on(async {
+                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            })});
             let msg = "Some teardown failed";
             conditions.push(ApplicationCondition::not_ready(msg));
             let new_status = Patch::Apply(json!({

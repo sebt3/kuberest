@@ -95,7 +95,7 @@ impl RestClient {
         self.add_header("Authorization", format!("Basic {hash}").as_str());
     }
     pub fn http_get(&mut self, path:&str) -> std::result::Result<Response, reqwest::Error> {
-        warn!("HTTP_GET {}",format!("{}/{}",self.baseurl,path));
+        debug!("http_get '{}' ",format!("{}/{}",self.baseurl,path));
         let mut client = Client::new().get(format!("{}/{}",self.baseurl,path));
         for (key,val) in self.headers.clone() {
             client = client.header(key.to_string(), val.to_string());
@@ -109,7 +109,7 @@ impl RestClient {
         if ! response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
-            return Err(Error::MethodFailed("Get".to_string(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
+            return Err(Error::MethodFailed("Get".to_string(), status.as_u16(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
         }
         let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
         Ok(text)
@@ -122,7 +122,7 @@ impl RestClient {
     pub fn rhai_get(&mut self, path:String) -> Map {
         let mut ret = Map::new();
         let result = self.http_get(path.as_str()).unwrap();
-        ret.insert("code".to_string().into(), Dynamic::from(result.status().as_u16()));
+        ret.insert("code".to_string().into(), Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()));
         tokio::task::block_in_place(|| {tokio::runtime::Handle::current().block_on(async {
             let text = result.text().await.unwrap();
             ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))));
@@ -131,6 +131,7 @@ impl RestClient {
         })})
     }
     pub fn http_patch(&mut self, path:&str, body: &str) -> Result<Response, reqwest::Error> {
+        debug!("http_patch '{}' ",format!("{}/{}",self.baseurl,path));
         let mut client = Client::new().patch(format!("{}/{}",self.baseurl,path)).body(body.to_string());
         for (key,val) in self.headers.clone() {
             client = client.header(key.to_string(), val.to_string());
@@ -144,7 +145,7 @@ impl RestClient {
         if ! response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
-            return Err(Error::MethodFailed("Patch".to_string(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
+            return Err(Error::MethodFailed("Patch".to_string(), status.as_u16(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
         }
         let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
         Ok(text)
@@ -159,7 +160,7 @@ impl RestClient {
         let body = if val.is_string() {val.to_string()} else {serde_json::to_string(&val).unwrap()};
         let mut ret = Map::new();
         let result = self.http_patch(path.as_str(),&body).unwrap();
-        ret.insert("code".to_string().into(), Dynamic::from(result.status().as_u16()));
+        ret.insert("code".to_string().into(), Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()));
         tokio::task::block_in_place(|| {tokio::runtime::Handle::current().block_on(async {
             let text = result.text().await.unwrap();
             ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))));
@@ -168,6 +169,7 @@ impl RestClient {
         })})
     }
     pub fn http_put(&mut self, path:&str, body: &str) -> Result<Response, reqwest::Error> {
+        debug!("http_put '{}' ",format!("{}/{}",self.baseurl,path));
         let mut client = Client::new().put(format!("{}/{}",self.baseurl,path)).body(body.to_string());
         for (key,val) in self.headers.clone() {
             client = client.header(key.to_string(), val.to_string());
@@ -181,7 +183,7 @@ impl RestClient {
         if ! response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
-            return Err(Error::MethodFailed("Put".to_string(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
+            return Err(Error::MethodFailed("Put".to_string(), status.as_u16(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
         }
         let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
         Ok(text)
@@ -196,7 +198,7 @@ impl RestClient {
         let body = if val.is_string() {val.to_string()} else {serde_json::to_string(&val).unwrap()};
         let mut ret = Map::new();
         let result = self.http_put(path.as_str(),&body).unwrap();
-        ret.insert("code".to_string().into(), Dynamic::from(result.status().as_u16()));
+        ret.insert("code".to_string().into(), Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()));
         tokio::task::block_in_place(|| {tokio::runtime::Handle::current().block_on(async {
             let text = result.text().await.unwrap();
             ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))));
@@ -205,6 +207,7 @@ impl RestClient {
         })})
     }
     pub fn http_post(&mut self, path:&str, body: &str) -> Result<Response, reqwest::Error> {
+        debug!("http_post '{}' ",format!("{}/{}",self.baseurl,path));
         let mut client = Client::new().post(format!("{}/{}",self.baseurl,path)).body(body.to_string());
         for (key,val) in self.headers.clone() {
             client = client.header(key.to_string(), val.to_string());
@@ -218,7 +221,7 @@ impl RestClient {
         if ! response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
-            return Err(Error::MethodFailed("Post".to_string(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
+            return Err(Error::MethodFailed("Post".to_string(), status.as_u16(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
         }
         let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
         Ok(text)
@@ -233,7 +236,7 @@ impl RestClient {
         let body = if val.is_string() {val.to_string()} else {serde_json::to_string(&val).unwrap()};
         let mut ret = Map::new();
         let result = self.http_post(path.as_str(),&body).unwrap();
-        ret.insert("code".to_string().into(), Dynamic::from(result.status().as_u16()));
+        ret.insert("code".to_string().into(), Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()));
         tokio::task::block_in_place(|| {tokio::runtime::Handle::current().block_on(async {
             let text = result.text().await.unwrap();
             ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))));
@@ -242,6 +245,7 @@ impl RestClient {
         })})
     }
     pub fn http_delete(&mut self, path:&str) -> Result<Response, reqwest::Error> {
+        debug!("http_delete '{}' ",format!("{}/{}",self.baseurl,path));
         let mut client = Client::new().delete(format!("{}/{}",self.baseurl,path));
         for (key,val) in self.headers.clone() {
             client = client.header(key.to_string(), val.to_string());
@@ -255,7 +259,7 @@ impl RestClient {
         if ! response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
-            return Err(Error::MethodFailed("Delete".to_string(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
+            return Err(Error::MethodFailed("Delete".to_string(), status.as_u16(), format!("The server returned the error: {} {} | {text}",status.as_str(),status.canonical_reason().unwrap_or("unknown"))));
         }
         let text = tokio::task::block_in_place(|| {Handle::current().block_on(async move {response.text().await})}).or_else(|e| return Err(Error::ReqwestError(e)))?;
         Ok(text)
@@ -268,7 +272,7 @@ impl RestClient {
     pub fn rhai_delete(&mut self, path:String) -> Map {
         let mut ret = Map::new();
         let result = self.http_delete(path.as_str()).unwrap();
-        ret.insert("code".to_string().into(), Dynamic::from(result.status().as_u16()));
+        ret.insert("code".to_string().into(), Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()));
         tokio::task::block_in_place(|| {tokio::runtime::Handle::current().block_on(async {
             let text = result.text().await.unwrap();
             ret.insert("json".to_string().into(), serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))));
@@ -298,7 +302,6 @@ impl RestClient {
         if method == UpdateMethod::Patch {
             self.json_patch(&full_path, input)
         } else if method == UpdateMethod::Put {
-            // TODO: read the object first and merge input into the result since PUT update should be full object
             self.json_put(&full_path, input)
         } else if method == UpdateMethod::Post {
             self.json_post(&full_path, input)

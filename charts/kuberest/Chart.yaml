@@ -1,6 +1,6 @@
 apiVersion: v2
 name: kuberest
-description: Allow to 
+description: Allow to Control remote REST api endpoints from the confort of your cluster
 type: application
 version: 0.1.0
-appVersion: 0.12.11
+appVersion: 1.0.0

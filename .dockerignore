@@ -1,1 +1,10 @@
 target
+deploy
+docs
+examples
+chart
+.github
+Dockerfile
+README.md
+release.toml
+rustfmt.toml

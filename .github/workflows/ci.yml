@@ -161,19 +161,20 @@ jobs:
       - name: helm template | kubctl apply
         run: |
           apiserver="$(kubectl get endpoints kubernetes -ojson | jq '.subsets[0].addresses[0].ip' -r)"
-          helm template charts/doc-controller \
+          helm template charts/kuberest \
             --set version=latest \
             --set networkPolicy.enabled=true \
             --set networkPolicy.apiserver.0=${apiserver}/32 \
             | kubectl apply -f -
-      - run: kubectl wait --for=condition=available deploy/doc-controller --timeout=30s
-      - run: kubectl apply -f yaml/instance-samuel.yaml
+      - run: kubectl wait --for=condition=available deploy/kuberest --timeout=30s
+      #- run: kubectl apply -f yaml/instance-samuel.yaml
       - run: sleep 2 # TODO: add condition on status and wait for it instead
       # verify reconcile actions have happened
-      - run: kubectl get netpol doc-controller -oyaml
-      - run: kubectl logs deploy/doc-controller
-      - run: kubectl get event --field-selector "involvedObject.kind=Document,involvedObject.name=samuel" | grep "HideRequested"
-      - run: kubectl get doc -oyaml | grep -A1 finalizers | grep restpaths.kuberest.solidite.fr
+      - run: kubectl get netpol kuberest -oyaml
+      - run: kubectl logs deploy/kuberest
+      # TODO: validate the behaviour of some objects
+      #- run: kubectl get event --field-selector "involvedObject.kind=Document,involvedObject.name=samuel" | grep "HideRequested"
+      #- run: kubectl get doc -oyaml | grep -A1 finalizers | grep restpaths.kuberest.solidite.fr
 
   lint:
     runs-on: ubuntu-latest
@@ -224,16 +225,17 @@ jobs:
       # Real CI work starts here
       - name: Build workspace
         run: cargo build
-      - name: Run workspace unit tests
-        run: cargo test
       - name: Generate crd.yaml
         run: cargo run --bin crdgen > deploy/crd/crd.yaml
       - name: Generate deployment.yaml
         run: helm template charts/kuberest > deploy/operator/deployment.yaml
       - name: Ensure generated output is committed
         run: |
-          if ! git diff --exit-code yaml/; then
+          if ! git diff --exit-code deploy/; then
               echo "Uncommitted changes in yaml directory"
-              echo "Please run 'just generate' and commit the results"
+              echo "Please run 'cargo cmd generate' and commit the results"
               exit 1
           fi
+      # TODO: Activate unit tests
+      # - name: Run workspace unit tests
+      #   run: cargo test

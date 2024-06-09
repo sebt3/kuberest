@@ -1,7 +1,7 @@
 apiVersion: kuberest.solidite.fr/v1
 kind: RestEndPoint
 metadata:
-  name: set-all-projects-merge-method
+  name: set-all-projects-config
 spec:
   inputs:
   - name: token
@@ -39,7 +39,7 @@ spec:
   # outputs:
   # - kind: ConfigMap
   #   metadata:
-  #     name: set-all-projects-merge-method
+  #     name: set-all-projects-config-results
   #   data:
   #     result.yaml: |-
   #       ---

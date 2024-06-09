@@ -1,5 +1,7 @@
 //! Helper methods only available for tests
-use crate::{Context, RestEndPoint, RestEndPointSpec, RestEndPointStatus, Metrics, Result, RESTPATH_FINALIZER};
+use crate::{
+    Context, Metrics, RestEndPoint, RestEndPointSpec, RestEndPointStatus, Result, RESTPATH_FINALIZER,
+};
 use assert_json_diff::assert_json_include;
 use http::{Request, Response};
 use kube::{client::Body, Client, Resource, ResourceExt};
@@ -21,12 +23,12 @@ impl RestEndPoint {
         d
     }
 
-/*    /// Modify document to be set to hide
-    pub fn needs_hide(mut self) -> Self {
-        self.spec.hide = true;
-        self
-    }
-*/
+    /*    /// Modify document to be set to hide
+        pub fn needs_hide(mut self) -> Self {
+            self.spec.hide = true;
+            self
+        }
+    */
     /// Modify document to set a deletion timestamp
     pub fn needs_delete(mut self) -> Self {
         use chrono::prelude::{DateTime, TimeZone, Utc};
@@ -165,7 +167,7 @@ impl ApiServerVerifier {
 
     async fn handle_event_create(mut self, reason: String) -> Result<Self> {
         let (request, send) = self.0.next_request().await.expect("service not called");
-        assert_eq!(request.method(), http::Method::POST);
+        assert_eq!(request.method(), http::Method::PATCH);
         assert_eq!(
             request.uri().to_string(),
             format!("/apis/events.k8s.io/v1/namespaces/default/events?")
@@ -190,7 +192,7 @@ impl ApiServerVerifier {
         assert_eq!(
             request.uri().to_string(),
             format!(
-                "/apis/kuberest.solidite.fr/v1/namespaces/default/restendpoints/{}/status?&force=true&fieldManager=cntrlr",
+                "/apis/kuberest.solidite.fr/v1/namespaces/default/restendpoints/{}/status?&force=true&fieldManager=restendpoints.kuberest.solidite.fr",
                 doc.name_any()
             )
         );
@@ -198,7 +200,7 @@ impl ApiServerVerifier {
         let json: serde_json::Value = serde_json::from_slice(&req_body).expect("patch_status object is json");
         let status_json = json.get("status").expect("status object").clone();
         let status: RestEndPointStatus = serde_json::from_value(status_json).expect("valid status");
-//        assert_eq!(status.hidden, doc.spec.hide, "status.hidden iff doc.spec.hide");
+        //        assert_eq!(status.hidden, doc.spec.hide, "status.hidden iff doc.spec.hide");
         let response = serde_json::to_vec(&doc.with_status(status)).unwrap();
         // pass through document "patch accepted"
         send.send_response(Response::builder().body(Body::from(response)).unwrap());

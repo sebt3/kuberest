@@ -65,5 +65,4 @@ spec:
       protocol: TCP
   {{- end }}
   {{- end }}
-
 {{- end }}

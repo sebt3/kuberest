@@ -1,0 +1,26 @@
+title: KubeREST put these Jobs to rest
+email: sebastien.huss@gmail.com
+description: >-
+  KubeREST put these Jobs to rest. Handle RESTfull API from the confort of your kubernetes clusters using a simple, yet powerfull, kubernetes operator.
+github_username:  sebt3
+domain: sebt3.github.io
+url: https://sebt3.github.io
+baseurl: /kuberest/
+
+# Build settings
+markdown: kramdown
+theme: minima
+plugins:
+  - jekyll-feed
+
+# Exclude from processing.
+# The following items will not be processed, by default. Create a custom list
+# to override the default setting.
+# exclude:
+#   - Gemfile
+#   - Gemfile.lock
+#   - node_modules
+#   - vendor/bundle/
+#   - vendor/cache/
+#   - vendor/gems/
+#   - vendor/ruby/

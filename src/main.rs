@@ -28,7 +28,11 @@ static PORT_VAR_NAME: &str = "PORT";
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     telemetry::init().await;
-    let port = if env::var(PORT_VAR_NAME).is_ok() {env::var(PORT_VAR_NAME).unwrap()} else {"8080".to_string()};
+    let port = if env::var(PORT_VAR_NAME).is_ok() {
+        env::var(PORT_VAR_NAME).unwrap()
+    } else {
+        "8080".to_string()
+    };
 
     // Initiatilize Kubernetes controller state
     let state = State::default();
@@ -43,7 +47,8 @@ async fn main() -> anyhow::Result<()> {
             .service(health)
             .service(metrics)
     })
-    .bind(format!("0.0.0.0:{port}"))?.shutdown_timeout(5);
+    .bind(format!("0.0.0.0:{port}"))?
+    .shutdown_timeout(5);
 
     // Both runtimes implements graceful shutdown, so poll until both are done
     tokio::join!(controller, server.run()).1?;

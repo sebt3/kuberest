@@ -58,9 +58,9 @@ pub mod telemetry;
 mod metrics;
 pub use metrics::Metrics;
 
-mod k8shandlers;
 mod handlebarshandler;
 mod httphandler;
+mod k8shandlers;
 mod passwordhandler;
 mod rhaihandler;
 
@@ -92,15 +92,26 @@ macro_rules! template {
 macro_rules! update {
     ( $list:expr, $type_obj:expr, $output:expr, $my_ns:expr, $my_values:expr, $conditions:expr, $recorder:expr ) => {
         match $list.update(&$output.metadata, $my_values).await {
-            Ok(x) => Some(x), Err(e) => {
-                $recorder.publish(Event {
-                    type_: EventType::Warning,
-                    reason: format!("Failed to update {}: {}.{}",$type_obj, $my_ns, $output.metadata.name),
-                    note: Some(format!("{e}")),
-                    action: "updating".into(),
-                    secondary: None,
-                }).await.map_err(Error::KubeError).unwrap();
-                $conditions.push(ApplicationCondition::output_failed(&format!("Patching {} {}.{} raised {e}", $type_obj, $my_ns, $output.metadata.name)));
+            Ok(x) => Some(x),
+            Err(e) => {
+                $recorder
+                    .publish(Event {
+                        type_: EventType::Warning,
+                        reason: format!(
+                            "Failed to update {}: {}.{}",
+                            $type_obj, $my_ns, $output.metadata.name
+                        ),
+                        note: Some(format!("{e}")),
+                        action: "updating".into(),
+                        secondary: None,
+                    })
+                    .await
+                    .map_err(Error::KubeError)
+                    .unwrap();
+                $conditions.push(ApplicationCondition::output_failed(&format!(
+                    "Patching {} {}.{} raised {e}",
+                    $type_obj, $my_ns, $output.metadata.name
+                )));
                 None
             }
         }
@@ -110,15 +121,26 @@ macro_rules! update {
 macro_rules! create {
     ( $list:expr, $type_obj:expr, $own:expr, $output:expr, $my_ns:expr, $my_values:expr, $conditions:expr, $recorder:expr ) => {
         match $list.create($own, &$output.clone().metadata, $my_values).await {
-            Ok(x) => Some(x), Err(e) => {
-                $recorder.publish(Event {
-                    type_: EventType::Warning,
-                    reason: format!("Failed to create {}: {}.{}",$type_obj, $my_ns, $output.metadata.name),
-                    note: Some(format!("{e}")),
-                    action: "updating".into(),
-                    secondary: None,
-                }).await.map_err(Error::KubeError).unwrap();
-                $conditions.push(ApplicationCondition::output_failed(&format!("Creating {} {}.{} raised {e}", $type_obj, $my_ns, $output.metadata.name)));
+            Ok(x) => Some(x),
+            Err(e) => {
+                $recorder
+                    .publish(Event {
+                        type_: EventType::Warning,
+                        reason: format!(
+                            "Failed to create {}: {}.{}",
+                            $type_obj, $my_ns, $output.metadata.name
+                        ),
+                        note: Some(format!("{e}")),
+                        action: "updating".into(),
+                        secondary: None,
+                    })
+                    .await
+                    .map_err(Error::KubeError)
+                    .unwrap();
+                $conditions.push(ApplicationCondition::output_failed(&format!(
+                    "Creating {} {}.{} raised {e}",
+                    $type_obj, $my_ns, $output.metadata.name
+                )));
                 None
             }
         }

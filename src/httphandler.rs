@@ -165,7 +165,7 @@ impl RestClient {
     pub fn rhai_get(&mut self, path: String) -> Map {
         let mut ret = Map::new();
         match self.http_get(path.as_str()) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -181,10 +181,14 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
-                    let mut res = Map::new();
-                    res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
-                    res
+            }
+            Err(e) => {
+                let mut res = Map::new();
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
+                res
             }
         }
     }
@@ -241,7 +245,7 @@ impl RestClient {
         };
         let mut ret = Map::new();
         match self.http_patch(path.as_str(), &body) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -257,12 +261,15 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
+            }
+            Err(e) => {
                 let mut res = Map::new();
-                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
                 res
             }
-
         }
     }
 
@@ -318,7 +325,7 @@ impl RestClient {
         };
         let mut ret = Map::new();
         match self.http_put(path.as_str(), &body) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -334,9 +341,13 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
+            }
+            Err(e) => {
                 let mut res = Map::new();
-                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
                 res
             }
         }
@@ -394,7 +405,7 @@ impl RestClient {
         };
         let mut ret = Map::new();
         match self.http_post(path.as_str(), &body) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -410,9 +421,13 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
+            }
+            Err(e) => {
                 let mut res = Map::new();
-                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
                 res
             }
         }
@@ -462,7 +477,7 @@ impl RestClient {
     pub fn rhai_delete(&mut self, path: String) -> Map {
         let mut ret = Map::new();
         match self.http_delete(path.as_str()) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -478,9 +493,13 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
+            }
+            Err(e) => {
                 let mut res = Map::new();
-                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
                 res
             }
         }

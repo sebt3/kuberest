@@ -1,4 +1,7 @@
+use std::str::FromStr;
+
 use crate::{Error, Error::*};
+use actix_web::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Client, Response};
 use rhai::{Dynamic, Map};
@@ -161,22 +164,29 @@ impl RestClient {
 
     pub fn rhai_get(&mut self, path: String) -> Map {
         let mut ret = Map::new();
-        let result = self.http_get(path.as_str()).unwrap();
-        ret.insert(
-            "code".to_string().into(),
-            Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
-        );
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let text = result.text().await.unwrap();
+        match self.http_get(path.as_str()) {
+            Ok(result) =>{
                 ret.insert(
-                    "json".to_string().into(),
-                    serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                    "code".to_string().into(),
+                    Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
                 );
-                ret.insert("body".to_string().into(), Dynamic::from(text));
-                ret.into()
-            })
-        })
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let text = result.text().await.unwrap();
+                        ret.insert(
+                            "json".to_string().into(),
+                            serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                        );
+                        ret.insert("body".to_string().into(), Dynamic::from(text));
+                        ret.into()
+                    })
+                })
+            },Err(e) =>{
+                    let mut res = Map::new();
+                    res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                    res
+            }
+        }
     }
 
     pub fn http_patch(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
@@ -230,22 +240,30 @@ impl RestClient {
             serde_json::to_string(&val).unwrap()
         };
         let mut ret = Map::new();
-        let result = self.http_patch(path.as_str(), &body).unwrap();
-        ret.insert(
-            "code".to_string().into(),
-            Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
-        );
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let text = result.text().await.unwrap();
+        match self.http_patch(path.as_str(), &body) {
+            Ok(result) =>{
                 ret.insert(
-                    "json".to_string().into(),
-                    serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                    "code".to_string().into(),
+                    Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
                 );
-                ret.insert("body".to_string().into(), Dynamic::from(text));
-                ret.into()
-            })
-        })
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let text = result.text().await.unwrap();
+                        ret.insert(
+                            "json".to_string().into(),
+                            serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                        );
+                        ret.insert("body".to_string().into(), Dynamic::from(text));
+                        ret.into()
+                    })
+                })
+            },Err(e) =>{
+                let mut res = Map::new();
+                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res
+            }
+
+        }
     }
 
     pub fn http_put(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
@@ -299,22 +317,29 @@ impl RestClient {
             serde_json::to_string(&val).unwrap()
         };
         let mut ret = Map::new();
-        let result = self.http_put(path.as_str(), &body).unwrap();
-        ret.insert(
-            "code".to_string().into(),
-            Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
-        );
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let text = result.text().await.unwrap();
+        match self.http_put(path.as_str(), &body) {
+            Ok(result) =>{
                 ret.insert(
-                    "json".to_string().into(),
-                    serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                    "code".to_string().into(),
+                    Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
                 );
-                ret.insert("body".to_string().into(), Dynamic::from(text));
-                ret.into()
-            })
-        })
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let text = result.text().await.unwrap();
+                        ret.insert(
+                            "json".to_string().into(),
+                            serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                        );
+                        ret.insert("body".to_string().into(), Dynamic::from(text));
+                        ret.into()
+                    })
+                })
+            },Err(e) =>{
+                let mut res = Map::new();
+                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res
+            }
+        }
     }
 
     pub fn http_post(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
@@ -368,22 +393,29 @@ impl RestClient {
             serde_json::to_string(&val).unwrap()
         };
         let mut ret = Map::new();
-        let result = self.http_post(path.as_str(), &body).unwrap();
-        ret.insert(
-            "code".to_string().into(),
-            Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
-        );
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let text = result.text().await.unwrap();
+        match self.http_post(path.as_str(), &body) {
+            Ok(result) =>{
                 ret.insert(
-                    "json".to_string().into(),
-                    serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                    "code".to_string().into(),
+                    Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
                 );
-                ret.insert("body".to_string().into(), Dynamic::from(text));
-                ret.into()
-            })
-        })
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let text = result.text().await.unwrap();
+                        ret.insert(
+                            "json".to_string().into(),
+                            serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                        );
+                        ret.insert("body".to_string().into(), Dynamic::from(text));
+                        ret.into()
+                    })
+                })
+            },Err(e) =>{
+                let mut res = Map::new();
+                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res
+            }
+        }
     }
 
     pub fn http_delete(&mut self, path: &str) -> Result<Response, reqwest::Error> {
@@ -429,22 +461,29 @@ impl RestClient {
 
     pub fn rhai_delete(&mut self, path: String) -> Map {
         let mut ret = Map::new();
-        let result = self.http_delete(path.as_str()).unwrap();
-        ret.insert(
-            "code".to_string().into(),
-            Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
-        );
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let text = result.text().await.unwrap();
+        match self.http_delete(path.as_str()) {
+            Ok(result) =>{
                 ret.insert(
-                    "json".to_string().into(),
-                    serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                    "code".to_string().into(),
+                    Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
                 );
-                ret.insert("body".to_string().into(), Dynamic::from(text));
-                ret.into()
-            })
-        })
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let text = result.text().await.unwrap();
+                        ret.insert(
+                            "json".to_string().into(),
+                            serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                        );
+                        ret.insert("body".to_string().into(), Dynamic::from(text));
+                        ret.into()
+                    })
+                })
+            },Err(e) =>{
+                let mut res = Map::new();
+                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res
+            }
+        }
     }
 
     pub fn obj_read(&mut self, method: ReadMethod, path: &str, key: &str) -> Result<Value, Error> {

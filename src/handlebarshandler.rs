@@ -19,13 +19,13 @@ handlebars_helper!(base64_encode: |arg:Value| STANDARD.encode(arg.as_str().unwra
     warn!("handlebars::base64_encode received a non-string parameter: {:}",arg);
     ""
 }).to_string()));
-handlebars_helper!(header_basic: |username:Value,password:Value| STANDARD.encode(format!("Basic {}:{}",username.as_str().unwrap_or_else(|| {
+handlebars_helper!(header_basic: |username:Value,password:Value| format!("Basic {}",STANDARD.encode(format!("{}:{}",username.as_str().unwrap_or_else(|| {
     warn!("handlebars::header_basic received a non-string username: {:}",username);
     ""
 }),password.as_str().unwrap_or_else(|| {
     warn!("handlebars::header_basic received a non-string password: {:}",password);
     ""
-}))));
+})))));
 handlebars_helper!(gen_password:  |len:u32| Passwords::new().generate(len, 6, 2, 2));
 handlebars_helper!(gen_password_alphanum:  |len:u32| Passwords::new().generate(len, 8, 2, 0));
 

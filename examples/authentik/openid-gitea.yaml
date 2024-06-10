@@ -71,23 +71,6 @@ spec:
         provider: "{{ write.oauth.gitea.pk }}"
         meta_launch_url: https://gitea.your-company.com
   outputs:
-  - kind: ConfigMap
-    metadata:
-      name: project-list
-    data:
-      config.yaml: |-
-        name: gitea-app
-        authorization_flow: "{{ read.flow.authorization.pk }}"
-        authentication_flow: "{{ read.flow.default.pk }}"
-        client_id: "{{ input.uuid }}"
-        property_mappings:
-        - "{{ json_query "results[0].pk" read.scopes.email }}"
-        - "{{ json_query "results[0].pk" read.scopes.openid }}"
-        - "{{ json_query "results[0].pk" read.scopes.profile }}"
-        client_type: "confidential"
-        sub_mode: "user_username"
-        signing_key: "{{ json_query "results[0].pk" read.keypair.ak }}"
-        redirect_uris: "https://gitea.your-company.com/user/oauth2/authentik/callback"
   - kind: Secret
     metadata:
       name: gitea-openid

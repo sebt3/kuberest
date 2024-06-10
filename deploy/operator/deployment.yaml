@@ -8,7 +8,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "0.9.1"
+    app.kubernetes.io/version: "0.9.2"
   namespace: default
 automountServiceAccountToken: true
 ---
@@ -54,7 +54,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "0.9.1"
+    app.kubernetes.io/version: "0.9.2"
 spec:
   type: ClusterIP
   ports:
@@ -74,7 +74,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "0.9.1"
+    app.kubernetes.io/version: "0.9.2"
 spec:
   replicas: 1
   selector:
@@ -92,7 +92,7 @@ spec:
         {}
       containers:
       - name: kuberest
-        image: sebt3/kuberest:0.9.1
+        image: sebt3/kuberest:0.9.2
         imagePullPolicy: IfNotPresent
         securityContext:
           {}

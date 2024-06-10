@@ -3,7 +3,6 @@ layout: page
 title: Installation
 permalink: /install/
 ---
-## Installation
 
 (TL;DR: `kubectl apply -k github.com/sebt3/kuberest//deploy`)
 
@@ -39,7 +38,9 @@ kubectl wait --for=condition=available deploy/kuberest --timeout=30s
 #### kustomize
 
 ```sh
+kubectl create ns kuberest
 kubectl apply -k github.com/sebt3/kuberest//deploy/operator
+kubectl wait -n kuberest --for=condition=available deploy/kuberest --timeout=30s
 ```
 
 #### helm
@@ -48,4 +49,5 @@ kubectl apply -k github.com/sebt3/kuberest//deploy/operator
 helm repo add kuberest https://sebt3.github.io/kuberest/
 kubectl create ns kuberest
 helm install kuberest/kuberest kuberest --namespace kuberest
+kubectl wait -n kuberest --for=condition=available deploy/kuberest --timeout=30s
 ```

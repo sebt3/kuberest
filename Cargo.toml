@@ -10,7 +10,7 @@ publish = false
 # use "cargo install cargo-commander", then "cargo cmd generate"
 [package.metadata.commands]
 generate = { cmd=[
-    "sed -i \"s/^appVersion:.*/appVersion: $(awk '/^version =/{print $3;exit}' Cargo.toml)/\" charts/kuberest/Chart.yaml",
+    "sed -i \"s/^appVersion:.*/appVersion: $(awk '/^version =/{print $3;exit}' Cargo.toml)/;s/^version:.*/version: $(awk '/^version =/{print $3;exit}' Cargo.toml)/\" charts/kuberest/Chart.yaml",
     "cargo run --bin crdgen > deploy/crd/crd.yaml",
     "helm template charts/kuberest > deploy/operator/deployment.yaml"
 ]}

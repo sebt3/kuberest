@@ -2,6 +2,17 @@ apiVersion: v1
 entries:
   kuberest:
   - apiVersion: v2
+    appVersion: 0.9.1
+    created: "2024-06-10T15:24:57.122460796Z"
+    description: Allow to Control remote REST api endpoints from the confort of your
+      cluster
+    digest: da03ee48463ffb8a1d940211953353221970d93bc6ac269b6a21294096dea791
+    name: kuberest
+    type: application
+    urls:
+    - https://github.com/sebt3/kuberest/releases/download/kuberest-0.9.1/kuberest-0.9.1.tgz
+    version: 0.9.1
+  - apiVersion: v2
     appVersion: 0.9.0
     created: "2024-06-10T12:23:53.620074573Z"
     description: Allow to Control remote REST api endpoints from the confort of your
@@ -34,4 +45,4 @@ entries:
     urls:
     - https://github.com/sebt3/kuberest/releases/download/kuberest-0.1.1/kuberest-0.1.1.tgz
     version: 0.1.1
-generated: "2024-06-10T12:23:53.620092857Z"
+generated: "2024-06-10T15:24:57.122480152Z"

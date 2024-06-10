@@ -36,7 +36,7 @@ tracing:
   port: 4317
 
 networkPolicy:
-  enabled: true
+  enabled: false
   dns: true
   # apiserver access: please scope; take addresses from "kubectl get endpoints kubernetes -n default"
   apiserver:

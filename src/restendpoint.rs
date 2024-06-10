@@ -169,6 +169,8 @@ pub struct WriteGroup {
     pub path: String,
     /// keyName: the key of the object (default: id)
     pub key_name: Option<String>,
+    /// keyUseSlash: should the update/delete url end with a slash at the end (default: false)
+    pub key_use_slash: Option<bool>,
     /// Method to use when creating an object (default: Get)
     pub create_method: Option<CreateMethod>,
     /// Method to use when reading an object (default: Post)
@@ -781,7 +783,13 @@ impl RestEndPoint {
         rhai.set_dynamic("values", &values);
 
         // Setup the httpClient
-        let mut rest = RestClient::new(self.spec.client.baseurl.clone().as_str());
+        let mut rest = RestClient::new(&template!(
+            self.spec.client.baseurl.clone().as_str(),
+            hbs,
+            &values,
+            conditions,
+            recorder
+        ));
         if let Some(headers) = self.spec.client.headers.clone() {
             for (key, value) in headers {
                 rest.add_header(
@@ -1069,6 +1077,7 @@ impl RestEndPoint {
                                         &path.as_str(),
                                         &myself.key,
                                         &vals,
+                                        group.key_use_slash.clone().unwrap_or(false),
                                     )
                                     .unwrap_or_else(|e| {
                                         giveup = if let Error::MethodFailed(_, code, _) = e {
@@ -1128,6 +1137,12 @@ impl RestEndPoint {
                             }
                         } else {
                             // Create the object
+                            let tmp = format!("{path}/");
+                            let my_path = if group.key_use_slash.unwrap_or(false) {
+                                tmp.as_str()
+                            } else {
+                                &path.as_str()
+                            };
                             let obj = rest
                                 .clone()
                                 .obj_create(
@@ -1138,7 +1153,7 @@ impl RestEndPoint {
                                             .clone()
                                             .unwrap_or(CreateMethod::Post),
                                     ),
-                                    &path.as_str(),
+                                    &my_path,
                                     &vals,
                                 )
                                 .unwrap_or_else(|e| {
@@ -1192,10 +1207,16 @@ impl RestEndPoint {
                                 }).to_string()
                             }
                         };
-                        if !giveup {
+                        if !giveup && !key.is_empty() {
+                            let tmp = format!("{key}/");
+                            let my_key = if group.key_use_slash.unwrap_or(false) {
+                                tmp.as_str()
+                            } else {
+                                &key.as_str()
+                            };
                             target_new.push(OwnedRestPoint::new(
                                 path.as_str(),
-                                &key.as_str(),
+                                my_key,
                                 &group.name.as_str(),
                                 &item.name.as_str(),
                                 item.teardown.unwrap_or(
@@ -1910,7 +1931,13 @@ impl RestEndPoint {
         rhai.set_dynamic("input", &values["input"]);
         rhai.set_dynamic("values", &values);
         // Setup the httpClient
-        let mut rest = RestClient::new(self.spec.client.baseurl.clone().as_str());
+        let mut rest = RestClient::new(&template!(
+            self.spec.client.baseurl.clone().as_str(),
+            hbs,
+            &values,
+            conditions,
+            recorder
+        ));
         if let Some(headers) = self.spec.client.headers.clone() {
             for (key, value) in headers {
                 rest.add_header(
@@ -2079,7 +2106,13 @@ impl RestEndPoint {
                 }
             }
         }
-        if conditions.len() > 0 || owned_new.len() > 0 || target_new.len() > 0 {
+        if conditions.iter().any(|c| {
+            c.condition_type != ConditionsType::InputMissing
+                && c.condition_type != ConditionsType::WriteAlreadyExist
+                && c.condition_type != ConditionsType::OutputAlreadyExist
+        }) || owned_new.len() > 0
+            || target_new.len() > 0
+        {
             // Wait 30s before reporting the failure, because the controller keeps trying and it might hammer the api-server and the api-endpoint targeted otherwise. Beside the events generated already informed the user of the issue
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {

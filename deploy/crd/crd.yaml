@@ -325,6 +325,10 @@ spec:
                       description: 'keyName: the key of the object (default: id)'
                       nullable: true
                       type: string
+                    keyUseSlash:
+                      description: 'keyUseSlash: should the update/delete url end with a slash at the end (default: false)'
+                      nullable: true
+                      type: boolean
                     name:
                       description: 'name of the write (used for handlebars renders: write.<name>)'
                       type: string

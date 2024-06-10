@@ -1,54 +1,4 @@
 ---
-# Source: kuberest/templates/networkpolicy.yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: kuberest
-  namespace: default
-  labels:
-    app: kuberest
-    app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "0.9.0"
-spec:
-  podSelector:
-    matchLabels:
-      app: kuberest
-  policyTypes:
-  - Ingress
-  - Egress
-  egress:
-
-  # Kubernetes apiserver access
-  - to:
-    - ipBlock:
-        cidr: 0.0.0.0/0
-    ports:
-    - port: 443
-      protocol: TCP
-    - port: 6443
-      protocol: TCP
-  # DNS egress
-  - to:
-    - podSelector:
-        matchLabels:
-          k8s-app: kube-dns
-    ports:
-    - port: 53
-      protocol: UDP
-
-  ingress:
-  # prometheus metrics scraping support
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          name: monitoring
-      podSelector:
-        matchLabels:
-          app: prometheus
-    ports:
-    - port: http
-      protocol: TCP
----
 # Source: kuberest/templates/rbac.yaml
 # Scoped service account
 apiVersion: v1
@@ -58,7 +8,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "0.9.0"
+    app.kubernetes.io/version: "0.9.1"
   namespace: default
 automountServiceAccountToken: true
 ---
@@ -104,7 +54,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "0.9.0"
+    app.kubernetes.io/version: "0.9.1"
 spec:
   type: ClusterIP
   ports:
@@ -124,7 +74,7 @@ metadata:
   labels:
     app: kuberest
     app.kubernetes.io/name: kuberest
-    app.kubernetes.io/version: "0.9.0"
+    app.kubernetes.io/version: "0.9.1"
 spec:
   replicas: 1
   selector:
@@ -142,7 +92,7 @@ spec:
         {}
       containers:
       - name: kuberest
-        image: sebt3/kuberest:0.9.0
+        image: sebt3/kuberest:0.9.1
         imagePullPolicy: IfNotPresent
         securityContext:
           {}

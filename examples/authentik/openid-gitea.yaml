@@ -1,0 +1,96 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: openid-gitea
+spec:
+  inputs:
+  - name: output
+    secretRef:
+      optional: true
+      name: gitea-openid
+  - name: uuid
+    handleBarsRender: "{{#if input.output.data.key }}{{ base64_decode input.output.data.key }}{{else}}{{ uuid_new_v7 }}{{/if}}"
+  - name: admin
+    secretRef:
+      name: authentik
+  client:
+    baseurl: "http://authentik.{{ input.admin.metadata.namespace }}.svc/api/v3"
+    keyName: pk
+    headers:
+      Authorization: "Bearer {{ base64_decode input.admin.data.AUTHENTIK_BOOTSTRAP_TOKEN }}"
+  reads:
+  - name: keypair
+    path: crypto/certificatekeypairs
+    items:
+    - name: ak
+      key: "?name=authentik+Self-signed+Certificate"
+  - name: flow
+    path: flows/instances
+    items:
+    - name: authorization
+      key: default-provider-authorization-implicit-consent/
+    - name: default
+      key: default-authentication-flow/
+  - name: scopes
+    path: propertymappings/scope
+    items:
+    - name: email
+      key: "?scope_name=email"
+    - name: profile
+      key: "?scope_name=profile"
+    - name: openid
+      key: "?scope_name=openid"
+  writes:
+  - name: oauth
+    path: providers/oauth2
+    keyUseSlash: true
+    items:
+    - name: gitea
+      values: |-
+        name: gitea-app
+        authorization_flow: "{{ read.flow.authorization.pk }}"
+        authentication_flow: "{{ read.flow.default.pk }}"
+        client_id: "{{ input.uuid }}"
+        property_mappings:
+        - "{{ json_query "results[0].pk" read.scopes.email }}"
+        - "{{ json_query "results[0].pk" read.scopes.openid }}"
+        - "{{ json_query "results[0].pk" read.scopes.profile }}"
+        client_type: "confidential"
+        sub_mode: "user_username"
+        signing_key: "{{ json_query "results[0].pk" read.keypair.ak }}"
+        redirect_uris: "https://gitea.your-company.com/user/oauth2/authentik/callback"
+  - name: applications
+    path: core/applications
+    keyUseSlash: true
+    keyName: slug
+    items:
+    - name: gitea
+      values: |-
+        name: gitea-app
+        slug: gitea-app
+        provider: "{{ write.oauth.gitea.pk }}"
+        meta_launch_url: https://gitea.your-company.com
+  outputs:
+  - kind: ConfigMap
+    metadata:
+      name: project-list
+    data:
+      config.yaml: |-
+        name: gitea-app
+        authorization_flow: "{{ read.flow.authorization.pk }}"
+        authentication_flow: "{{ read.flow.default.pk }}"
+        client_id: "{{ input.uuid }}"
+        property_mappings:
+        - "{{ json_query "results[0].pk" read.scopes.email }}"
+        - "{{ json_query "results[0].pk" read.scopes.openid }}"
+        - "{{ json_query "results[0].pk" read.scopes.profile }}"
+        client_type: "confidential"
+        sub_mode: "user_username"
+        signing_key: "{{ json_query "results[0].pk" read.keypair.ak }}"
+        redirect_uris: "https://gitea.your-company.com/user/oauth2/authentik/callback"
+  - kind: Secret
+    metadata:
+      name: gitea-openid
+    data:
+      key: "{{ write.oauth.gitea.client_id }}"
+      secret: "{{ write.oauth.gitea.client_secret }}"

@@ -376,10 +376,10 @@ spec:
 | gen_password_alphanum | length (number) | string | Generate a password of requested length without any special characters | `let weak_passwd = gen_password_alphanum(8);` |
 |base64_decode  | base64_encoded_data (string) | string | Decode a base64 encode string (usefull for Secret values)  | `letdecoded = base64_decode(input.secret.data.some_key);`
 |base64_encode  | string_to_encode      | string | Encode a string/buffer with the base64 encoding  | `let encoded = base64_encode("username:password");`
-| json_encode | data (any) | string | Convert any data to their JSON representation string | let encoded = json_encode(#{test: "value"});
-| json_decode | encoded_data (string) | any | convert any json formated data to their rhai object/array/... conterpart | let data = json_decode("{\\"name\\":\\"paul\\"}");
-| yaml_encode | data (any) | string | Convert any data to their YAML representation string | let encoded = json_encode(#{test: "value"});
-| yaml_decode | encoded_data (string) | any | convert any YAML formated data to their rhai object/array/... conterpart | let data = yaml_decode("name: paul");
+| json_encode | data (any) | string | Convert any data to their JSON representation string | `let encoded = json_encode(#{test: "value"});`
+| json_decode | encoded_data (string) | any | convert any json formated data to their rhai object/array/... conterpart | `let data = json_decode("{\\"name\\":\\"paul\\"}");`
+| yaml_encode | data (any) | string | Convert any data to their YAML representation string | `let encoded = yaml_encode(#{test: "value"});`
+| yaml_decode | encoded_data (string) | any | convert any YAML formated data to their rhai object/array/... conterpart | `let data = yaml_decode("name: paul");`
 
 ### The `hbs` object
 

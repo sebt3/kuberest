@@ -1,0 +1,33 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: k8s-system-pod
+spec:
+  inputs:
+  - name: admin
+    secretRef:
+      name: k8s-admin
+  client:
+    baseurl: >-
+      https://{{ env_var "KUBERNETES_SERVICE_HOST" }}:{{ env_var "KUBERNETES_SERVICE_PORT" }}
+    serverCa: "{{ base64_decode input.admin.data.certificate-authority-data }}"
+    clientCert: "{{ base64_decode input.admin.data.client-certificate-data }}"
+    clientKey: "{{ base64_decode input.admin.data.client-key-data }}"
+  reads:
+  - name: version
+    path: version
+    items: [{"name": "get", "key": ""}]
+  - name: pod
+    path: api/v1/namespaces/kube-system/pods
+    items: [{"name": "list", "key": ""}]
+  outputs:
+  - kind: ConfigMap
+    metadata:
+      name: result
+    data:
+      version.yaml: |-
+        ---
+        {{ json_to_str read.version.get format="yaml" }}
+      pod.yaml: |-
+        ---
+        {{ json_to_str read.pod.list format="yaml" }}

@@ -22,10 +22,6 @@ spec:
           spec:
             description: Describe the specification of a RestEndPoint
             properties:
-              change:
-                description: A rhai intermediate script to handle url change, or basic-to-token authentification method transition
-                nullable: true
-                type: string
               checkFrequency:
                 description: 'checkFrequency define the pooling interval (in seconds, default: 300)'
                 format: uint64
@@ -37,6 +33,14 @@ spec:
                 properties:
                   baseurl:
                     description: The baseurl the client will use. All path will use this as a prefix
+                    type: string
+                  clientCert:
+                    description: mTLS client certificate
+                    nullable: true
+                    type: string
+                  clientKey:
+                    description: mTLS client key
+                    nullable: true
                     type: string
                   createMethod:
                     description: 'Method to use when creating an object (default: Get)'
@@ -64,6 +68,10 @@ spec:
                     description: 'Method to use when reading an object (default: Post)'
                     enum:
                     - Get
+                    nullable: true
+                    type: string
+                  serverCa:
+                    description: For self-signed Certificates on the destination endpoint
                     nullable: true
                     type: string
                   teardown:
@@ -394,7 +402,6 @@ spec:
                       - TemplateFailed
                       - PreScriptFailed
                       - PostScriptFailed
-                      - ChangeScriptFailed
                       - TeardownScriptFailed
                       - ReadFailed
                       - WriteFailed

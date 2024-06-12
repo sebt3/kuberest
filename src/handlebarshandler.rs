@@ -6,24 +6,24 @@ pub use serde_json::Value;
 use tracing::*;
 
 handlebars_helper!(base64_decode: |arg:Value| String::from_utf8(STANDARD.decode(arg.as_str().unwrap_or_else(|| {
-    warn!("handlebars::base64_decode received a non-string parameter: {:}",arg);
+    warn!("handlebars::base64_decode received a non-string parameter: {:?}",arg);
     ""
 }).to_string()).unwrap_or_else(|e| {
-    warn!("handlebars::base64_decode failed to decode with: {e}");
+    warn!("handlebars::base64_decode failed to decode with: {e:?}");
     vec![]
 })).unwrap_or_else(|e| {
-    warn!("handlebars::base64_decode failed to convert to string with: {e}");
+    warn!("handlebars::base64_decode failed to convert to string with: {e:?}");
     String::new()
 }));
 handlebars_helper!(base64_encode: |arg:Value| STANDARD.encode(arg.as_str().unwrap_or_else(|| {
-    warn!("handlebars::base64_encode received a non-string parameter: {:}",arg);
+    warn!("handlebars::base64_encode received a non-string parameter: {:?}",arg);
     ""
 }).to_string()));
 handlebars_helper!(header_basic: |username:Value,password:Value| format!("Basic {}",STANDARD.encode(format!("{}:{}",username.as_str().unwrap_or_else(|| {
-    warn!("handlebars::header_basic received a non-string username: {:}",username);
+    warn!("handlebars::header_basic received a non-string username: {:?}",username);
     ""
 }),password.as_str().unwrap_or_else(|| {
-    warn!("handlebars::header_basic received a non-string password: {:}",password);
+    warn!("handlebars::header_basic received a non-string password: {:?}",password);
     ""
 })))));
 handlebars_helper!(gen_password:  |len:u32| Passwords::new().generate(len, 6, 2, 2));
@@ -53,8 +53,14 @@ impl HandleBars<'_> {
         self.engine.register_template_string(name, template)
     }
 
-    pub fn register_template_rhai(&mut self, name: String, template: String) {
-        self.register_template(name.as_str(), template.as_str()).unwrap();
+    pub fn register_template_rhai(&mut self, name: String, template: String) -> bool {
+        match self.register_template(name.as_str(), template.as_str()) {
+            Ok(()) => true,
+            Err(e) => {
+                debug!("Registring template from rhai generated: {e:?}");
+                false
+            }
+        }
     }
 
     pub fn render(
@@ -66,6 +72,11 @@ impl HandleBars<'_> {
     }
 
     pub fn render_from_rhai(&mut self, template: String, data: rhai::Map) -> String {
-        self.engine.render_template(template.as_str(), &data).unwrap()
+        self.engine
+            .render_template(template.as_str(), &data)
+            .unwrap_or_else(|e| {
+                debug!("Rendering template from rhai generated: {e:?}");
+                String::new()
+            })
     }
 }

@@ -324,42 +324,102 @@ All rhai scripts (pre/change/post/teardown) are expected to return a `Map`, so t
 ```
 This is an empty `Map` in the rhai language. Failing to return a `Map` will stop the process. Errors are documented in the conditions of the `RestEndpoint`.
 
-### `pre` script usages
+### `pre` script usage
 
-#### 2 stages authentication process
-
-```rhai
-```
-
-#### Templating/Preparing data for later stage(s)
+Templating/Preparing data for later stage(s):
 
 ```rhai
+fn genValues(name) {
+  #{
+    name: name,
+    other: "properties",
+    to: #{
+      configure: "your",
+      way: name+"-test"
+    }
+  }
+}
+#{
+  pierre: genValues("pierre"),
+  paul: genValues("paul"),
+  jacques: genValues("jacques"),
+}
 ```
 
-### `change` script usages
+### `post` script usage
 
-#### Duplicating data between 2 endpoints
+Some api endpoints are not REST friendly, use your scripting skillz for these.
+> **warning** You're on your own. Using this mean kuberest wont handle the teardown process for you. Before using this, write your teardown script. Or you'll leave garbage behind you.
 
-```rhai
-```
 
-#### Non-REST friendly api-endpoints
-
-```rhai
-```
-
-### `post` script usages
-
-#### Templating/Preparing data for outputs
-
-### `teardown` script usages
+### `teardown` script usage
 {% endraw %}
 ![workflow diagram](../kuberest_teardown_flow.png "Workflow")
 
+It's meant to undo your changes in the `post` script.
 
-If you used a `pre` script for 2-stages authentification or any of the `change` scripts usages scenarios, a teardown script will be required to help the `DELETE` to happen correctly.
+If your `writes` use the `pre` variables in the templates, then the teardown needs to provides the sames values. YAML allow to duplicate strings, use it:
+```yaml
+spec:
+  pre: &genValues |-
+    #{
+      some: "values"
+    }
+  teardown: *genValues
+```
 
 ## Available methods for *rhai* scripts
 
-|Method         | Arguments             | Description   | Example
-|---            |---                    |---            |---
+|Method         | Arguments             | Return | Description   | Example |
+|---            |---                    |---     |---            |---      |
+| gen_password  | length (number)       | string | Generate a password of requested length | `let passwd = gen_password(32);` |
+| gen_password_alphanum | length (number) | string | Generate a password of requested length without any special characters | `let weak_passwd = gen_password_alphanum(8);` |
+|base64_decode  | base64_encoded_data (string) | string | Decode a base64 encode string (usefull for Secret values)  | `letdecoded = base64_decode(input.secret.data.some_key);`
+|base64_encode  | string_to_encode      | string | Encode a string/buffer with the base64 encoding  | `let encoded = base64_encode("username:password");`
+| json_encode | data (any) | string | Convert any data to their JSON representation string | let encoded = json_encode(#{test: "value"});
+| json_decode | encoded_data (string) | any | convert any json formated data to their rhai object/array/... conterpart | let data = json_decode("{\\"name\\":\\"paul\\"}");
+| yaml_encode | data (any) | string | Convert any data to their YAML representation string | let encoded = json_encode(#{test: "value"});
+| yaml_decode | encoded_data (string) | any | convert any YAML formated data to their rhai object/array/... conterpart | let data = yaml_decode("name: paul");
+
+### The `hbs` object
+
+From rhai you have a complete access to the HandleBars templating environement using the `hbs` object :
+
+|Method         | Arguments             | Return | Description   | Example |
+|---            |---                    |---     |---            |---      |
+| render_from  | template(string), values (object) | string | Generate a password of requested length | `let passwd = hbs.render_from("{{> passwd }}", values);` |
+
+### The `client` object
+
+From rhai you have a complete access to the REST client used in kuberest using the `client` object:
+
+|Method         | Arguments             | Return | Description   | Example |
+|---            |---                    |---     |---            |---      |
+| http_get  | path(string) | object | do an HTTP GET on `path` | `let res = client.http_get("projects");` |
+| http_delete  | path(string) | object | do an HTTP DELETE on `path` | `let res = client.http_delete("projects/1345/groups/43");` |
+| http_patch  | path(string), values (object) | object | do an HTTP PATCH on `path` | `let res = client.http_patch("projects/1345/groups/43", #{name: "test"});` |
+| http_post  | path(string), values (object) | object | do an HTTP POST on `path` | `let res = client.http_post("projects/1345/groups/43", #{name: "test"});` |
+| http_put  | path(string), values (object) | object | do an HTTP PUT on `path` | `let res = client.http_put("projects/1345/groups/43", #{name: "test"});` |
+
+In the context of duplicating data to an other service, you can create an other client:
+```rhai
+let target = new_client("https://gitlab.com/api/v4");
+target.add_header("add_header", "Bearer "+base64_decode(input.gitlab.data.token));
+target.add_header_json();
+let prjs = target.http_get("projects");
+...
+```
+|Method         | Arguments             | Description   |
+|---            |---                    |---            |
+| new_client    | baseurl(string)  | Create a new http client |
+| set_baseurl  | baseurl(string) | Change the basepath of the client |
+| set_server_ca  | PEM_certificate (string) | Configure the serverCA certificate (for self-signed target) |
+| set_mtls_cert_key  | PEM_certificate (string),PEM_key (string) | Configure Client certificate and key for mTLS authentification |
+| add_header  | key (string), value (string) | Set a header for the client |
+| add_header_bearer  | token(string) | Add an `Authorization: Bearer` header |
+| add_header_basic | username(string), password(string) | Add an `Authorization: Basic` header |
+| add_header_json  | null | Set the Accept and Content-Type headers to json |
+| headers_reset | null | Remove all stored headers on the client |
+
+
+> **warning** do not forget to write the teardown script.

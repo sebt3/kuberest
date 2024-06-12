@@ -64,6 +64,8 @@ impl Script {
             .register_fn("new_client", RestClient::new)
             .register_fn("headers_reset", RestClient::headers_reset_rhai)
             .register_fn("set_baseurl", RestClient::baseurl_rhai)
+            .register_fn("set_server_ca", RestClient::set_server_ca)
+            .register_fn("set_mtls_cert_key", RestClient::set_mtls)
             .register_fn("add_header", RestClient::add_header_rhai)
             .register_fn("add_header_json", RestClient::add_header_json)
             .register_fn("add_header_bearer", RestClient::add_header_bearer)

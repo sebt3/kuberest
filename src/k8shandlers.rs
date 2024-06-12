@@ -119,7 +119,7 @@ impl SecretHandler {
             .api
             .delete(name, &DeleteParams::default())
             .await
-            .or_else(|e| bail!("{e}"));
+            .or_else(|e| bail!("{e:?}"));
         Ok(())
     }
 }
@@ -236,7 +236,7 @@ impl ConfigMapHandler {
             .api
             .delete(name, &DeleteParams::default())
             .await
-            .or_else(|e| bail!("{e}"));
+            .or_else(|e| bail!("{e:?}"));
         Ok(())
     }
 }

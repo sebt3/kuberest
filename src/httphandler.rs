@@ -1,9 +1,9 @@
 use std::str::FromStr;
 
-use crate::{Error, Error::*};
+use crate::{Error, Error::*, RESTPATH_FINALIZER};
 use actix_web::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use reqwest::{Client, Response};
+use reqwest::{Certificate, Client, Response};
 use rhai::{Dynamic, Map};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,9 @@ pub enum DeleteMethod {
 pub struct RestClient {
     baseurl: String,
     headers: Map,
+    server_ca: Option<String>,
+    client_key: Option<String>,
+    client_cert: Option<String>,
 }
 
 impl RestClient {
@@ -48,12 +51,24 @@ impl RestClient {
         RestClient {
             baseurl: base.to_string(),
             headers: Map::new(),
+            server_ca: None,
+            client_cert: None,
+            client_key: None,
         }
     }
 
     pub fn baseurl(&mut self, base: &str) -> &mut RestClient {
         self.baseurl = base.to_string();
         self
+    }
+
+    pub fn set_server_ca(&mut self, ca: &str) {
+        self.server_ca = Some(ca.to_string());
+    }
+
+    pub fn set_mtls(&mut self, cert: &str, key: &str) {
+        self.client_cert = Some(cert.to_string());
+        self.client_key = Some(key.to_string());
     }
 
     pub fn baseurl_rhai(&mut self, base: String) {
@@ -121,13 +136,74 @@ impl RestClient {
         self.add_header("Authorization", format!("Basic {hash}").as_str());
     }
 
+    fn get_client(&mut self) -> std::result::Result<Client, reqwest::Error> {
+        let five_sec = std::time::Duration::from_secs(60 * 5);
+        if self.server_ca.is_none() && (self.client_cert.is_none() || self.client_key.is_none()) {
+            Client::builder()
+                .user_agent(RESTPATH_FINALIZER)
+                .timeout(five_sec)
+                .build()
+        } else if self.client_cert.is_none() || self.client_key.is_none() {
+            match Certificate::from_pem(self.server_ca.clone().unwrap().as_bytes()) {
+                Ok(c) => Client::builder()
+                    .user_agent(RESTPATH_FINALIZER)
+                    .timeout(five_sec)
+                    .add_root_certificate(c)
+                    .use_rustls_tls()
+                    .build(),
+                Err(e) => Err(e),
+            }
+        } else {
+            let cli_cert = format!(
+                "{}
+{}",
+                self.client_key.clone().unwrap(),
+                self.client_cert.clone().unwrap()
+            );
+            match reqwest::Identity::from_pem(cli_cert.as_bytes()) {
+                Ok(identity) => {
+                    if self.server_ca.is_none() {
+                        Client::builder()
+                            .user_agent(RESTPATH_FINALIZER)
+                            .timeout(five_sec)
+                            .use_rustls_tls()
+                            .identity(identity)
+                            .build()
+                    } else {
+                        match Certificate::from_pem(self.server_ca.clone().unwrap().as_bytes()) {
+                            Ok(c) => Client::builder()
+                                .user_agent(RESTPATH_FINALIZER)
+                                .timeout(five_sec)
+                                .add_root_certificate(c)
+                                .use_rustls_tls()
+                                .identity(identity)
+                                .build(),
+                            Err(e) => Err(e),
+                        }
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        }
+    }
+
     pub fn http_get(&mut self, path: &str) -> std::result::Result<Response, reqwest::Error> {
         debug!("http_get '{}' ", format!("{}/{}", self.baseurl, path));
-        let mut client = Client::new().get(format!("{}/{}", self.baseurl, path));
-        for (key, val) in self.headers.clone() {
-            client = client.header(key.to_string(), val.to_string());
+        match self.get_client() {
+            Ok(client) => {
+                let mut req = client.get(format!("{}/{}", self.baseurl, path));
+                for (key, val) in self.headers.clone() {
+                    req = req.header(key.to_string(), val.to_string());
+                }
+                tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+            }
+            Err(e) => {
+                if e.is_builder() {
+                    warn!("CLIENT: {e:?}");
+                }
+                Err(e)
+            }
         }
-        tokio::task::block_in_place(|| Handle::current().block_on(async move { client.send().await }))
     }
 
     pub fn body_get(&mut self, path: &str) -> Result<String, Error> {
@@ -165,7 +241,7 @@ impl RestClient {
     pub fn rhai_get(&mut self, path: String) -> Map {
         let mut ret = Map::new();
         match self.http_get(path.as_str()) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -181,23 +257,32 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
-                    let mut res = Map::new();
-                    res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
-                    res
+            }
+            Err(e) => {
+                let mut res = Map::new();
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
+                res
             }
         }
     }
 
     pub fn http_patch(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
         debug!("http_patch '{}' ", format!("{}/{}", self.baseurl, path));
-        let mut client = Client::new()
-            .patch(format!("{}/{}", self.baseurl, path))
-            .body(body.to_string());
-        for (key, val) in self.headers.clone() {
-            client = client.header(key.to_string(), val.to_string());
+        match self.get_client() {
+            Ok(client) => {
+                let mut req = client
+                    .patch(format!("{}/{}", self.baseurl, path))
+                    .body(body.to_string());
+                for (key, val) in self.headers.clone() {
+                    req = req.header(key.to_string(), val.to_string());
+                }
+                tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+            }
+            Err(e) => Err(e),
         }
-        tokio::task::block_in_place(|| Handle::current().block_on(async move { client.send().await }))
     }
 
     pub fn body_patch(&mut self, path: &str, body: &str) -> Result<String, Error> {
@@ -241,7 +326,7 @@ impl RestClient {
         };
         let mut ret = Map::new();
         match self.http_patch(path.as_str(), &body) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -257,24 +342,32 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
+            }
+            Err(e) => {
                 let mut res = Map::new();
-                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
                 res
             }
-
         }
     }
 
     pub fn http_put(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
         debug!("http_put '{}' ", format!("{}/{}", self.baseurl, path));
-        let mut client = Client::new()
-            .put(format!("{}/{}", self.baseurl, path))
-            .body(body.to_string());
-        for (key, val) in self.headers.clone() {
-            client = client.header(key.to_string(), val.to_string());
+        match self.get_client() {
+            Ok(client) => {
+                let mut req = client
+                    .put(format!("{}/{}", self.baseurl, path))
+                    .body(body.to_string());
+                for (key, val) in self.headers.clone() {
+                    req = req.header(key.to_string(), val.to_string());
+                }
+                tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+            }
+            Err(e) => Err(e),
         }
-        tokio::task::block_in_place(|| Handle::current().block_on(async move { client.send().await }))
     }
 
     pub fn body_put(&mut self, path: &str, body: &str) -> Result<String, Error> {
@@ -318,7 +411,7 @@ impl RestClient {
         };
         let mut ret = Map::new();
         match self.http_put(path.as_str(), &body) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -334,9 +427,13 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
+            }
+            Err(e) => {
                 let mut res = Map::new();
-                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
                 res
             }
         }
@@ -344,13 +441,18 @@ impl RestClient {
 
     pub fn http_post(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
         debug!("http_post '{}' ", format!("{}/{}", self.baseurl, path));
-        let mut client = Client::new()
-            .post(format!("{}/{}", self.baseurl, path))
-            .body(body.to_string());
-        for (key, val) in self.headers.clone() {
-            client = client.header(key.to_string(), val.to_string());
+        match self.get_client() {
+            Ok(client) => {
+                let mut req = client
+                    .post(format!("{}/{}", self.baseurl, path))
+                    .body(body.to_string());
+                for (key, val) in self.headers.clone() {
+                    req = req.header(key.to_string(), val.to_string());
+                }
+                tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+            }
+            Err(e) => Err(e),
         }
-        tokio::task::block_in_place(|| Handle::current().block_on(async move { client.send().await }))
     }
 
     pub fn body_post(&mut self, path: &str, body: &str) -> Result<String, Error> {
@@ -394,7 +496,7 @@ impl RestClient {
         };
         let mut ret = Map::new();
         match self.http_post(path.as_str(), &body) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -410,9 +512,13 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
+            }
+            Err(e) => {
                 let mut res = Map::new();
-                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
                 res
             }
         }
@@ -420,11 +526,16 @@ impl RestClient {
 
     pub fn http_delete(&mut self, path: &str) -> Result<Response, reqwest::Error> {
         debug!("http_delete '{}' ", format!("{}/{}", self.baseurl, path));
-        let mut client = Client::new().delete(format!("{}/{}", self.baseurl, path));
-        for (key, val) in self.headers.clone() {
-            client = client.header(key.to_string(), val.to_string());
+        match self.get_client() {
+            Ok(client) => {
+                let mut req = client.delete(format!("{}/{}", self.baseurl, path));
+                for (key, val) in self.headers.clone() {
+                    req = req.header(key.to_string(), val.to_string());
+                }
+                tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+            }
+            Err(e) => Err(e),
         }
-        tokio::task::block_in_place(|| Handle::current().block_on(async move { client.send().await }))
     }
 
     pub fn body_delete(&mut self, path: &str) -> Result<String, Error> {
@@ -462,7 +573,7 @@ impl RestClient {
     pub fn rhai_delete(&mut self, path: String) -> Map {
         let mut ret = Map::new();
         match self.http_delete(path.as_str()) {
-            Ok(result) =>{
+            Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
                     Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
@@ -478,9 +589,13 @@ impl RestClient {
                         ret.into()
                     })
                 })
-            },Err(e) =>{
+            }
+            Err(e) => {
                 let mut res = Map::new();
-                res.insert("error".to_string().into(), Dynamic::from_str(&format!("{:}",e)).unwrap());
+                res.insert(
+                    "error".to_string().into(),
+                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
+                );
                 res
             }
         }

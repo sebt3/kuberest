@@ -112,6 +112,12 @@ pub struct WebClient {
     pub delete_method: Option<DeleteMethod>,
     /// Delete the Objects on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)
     teardown: Option<bool>,
+    /// For self-signed Certificates on the destination endpoint
+    pub server_ca: Option<String>,
+    /// mTLS client key
+    pub client_key: Option<String>,
+    /// mTLS client certificate
+    pub client_cert: Option<String>,
 }
 impl Default for WebClient {
     fn default() -> Self {
@@ -124,6 +130,9 @@ impl Default for WebClient {
             update_method: Some(UpdateMethod::Put),
             delete_method: Some(DeleteMethod::Delete),
             teardown: Some(true),
+            server_ca: None,
+            client_cert: None,
+            client_key: None,
         }
     }
 }
@@ -238,7 +247,6 @@ pub enum ConditionsType {
     TemplateFailed,
     PreScriptFailed,
     PostScriptFailed,
-    ChangeScriptFailed,
     TeardownScriptFailed,
     ReadFailed,
     WriteFailed,
@@ -303,14 +311,6 @@ impl ApplicationCondition {
 
     pub fn post_script_failed(message: &str) -> ApplicationCondition {
         ApplicationCondition::new(message, ConditionsStatus::True, ConditionsType::PostScriptFailed)
-    }
-
-    pub fn change_script_failed(message: &str) -> ApplicationCondition {
-        ApplicationCondition::new(
-            message,
-            ConditionsStatus::True,
-            ConditionsType::ChangeScriptFailed,
-        )
     }
 
     pub fn teardown_script_failed(message: &str) -> ApplicationCondition {
@@ -450,8 +450,6 @@ pub struct RestEndPointSpec {
     pub pre: Option<String>,
     /// Allow to read some pre-existing objects
     pub reads: Option<Vec<ReadGroup>>,
-    /// A rhai intermediate script to handle url change, or basic-to-token authentification method transition
-    pub change: Option<String>,
     /// Sub-paths to the client. Allow to describe the objects to create on the end-point
     pub writes: Option<Vec<WriteGroup>>,
     /// A rhai post-script for final validation if any
@@ -563,7 +561,7 @@ impl RestEndPoint {
                                     .publish(Event {
                                         type_: EventType::Warning,
                                         reason: format!("Failed register template: template.{}", item.name),
-                                        note: Some(format!("{e}")),
+                                        note: Some(format!("{e:?}")),
                                         action: "registering".into(),
                                         secondary: None,
                                     })
@@ -573,7 +571,7 @@ impl RestEndPoint {
                             })
                         });
                         conditions.push(ApplicationCondition::template_failed(&format!(
-                            "Registering template.{} raised {e}",
+                            "Registering template.{} raised {e:?}",
                             item.name
                         )));
                     });
@@ -799,6 +797,27 @@ impl RestEndPoint {
             }
         }
         rest.add_header_json();
+        if let Some(ca) = self.spec.client.server_ca.clone() {
+            rest.set_server_ca(&template!(&ca.as_str(), hbs, &values, conditions, recorder));
+        }
+        if self.spec.client.client_cert.is_some() && self.spec.client.client_key.is_some() {
+            rest.set_mtls(
+                &template!(
+                    &self.spec.client.client_cert.clone().unwrap().as_str(),
+                    hbs,
+                    &values,
+                    conditions,
+                    recorder
+                ),
+                &template!(
+                    &self.spec.client.client_key.clone().unwrap().as_str(),
+                    hbs,
+                    &values,
+                    conditions,
+                    recorder
+                ),
+            );
+        }
         // Validate that client setup went Ok
         let cnd = conditions.clone();
         if cnd
@@ -827,13 +846,13 @@ impl RestEndPoint {
         if let Some(script) = self.spec.pre.clone() {
             let cnd = conditions.clone();
             values["pre"] = rhai.eval(&script).unwrap_or_else(|e| {
-                conditions.push(ApplicationCondition::pre_script_failed(&format!("{e}")));
+                conditions.push(ApplicationCondition::pre_script_failed(&format!("{e:?}")));
                 futures::executor::block_on(async {
                     recorder
                         .publish(Event {
                             type_: EventType::Warning,
                             reason: "pre-script failed".into(),
-                            note: Some(format!("pre-script failed with: {e}")),
+                            note: Some(format!("pre-script failed with: {e:?}")),
                             action: "pre-script".into(),
                             secondary: None,
                         })
@@ -894,7 +913,7 @@ impl RestEndPoint {
                                                     group.name.clone(),
                                                     read.name
                                                 ),
-                                                note: Some(format!("{e}")),
+                                                note: Some(format!("{e:?}")),
                                                 action: "reading".into(),
                                                 secondary: None,
                                             })
@@ -904,7 +923,7 @@ impl RestEndPoint {
                                     })
                                 });
                                 conditions.push(ApplicationCondition::read_failed(&format!(
-                                    "Reading read.{}.{} raised {e}",
+                                    "Reading read.{}.{} raised {e:?}",
                                     group.name.clone(),
                                     read.name
                                 )));
@@ -938,49 +957,6 @@ impl RestEndPoint {
         rhai.set_dynamic("read", &values["read"]);
         rhai.set_dynamic("values", &values);
 
-        // Run the change script
-        if let Some(script) = self.spec.change.clone() {
-            let cnd = conditions.clone();
-            values["change"] = rhai.eval(&script).unwrap_or_else(|e| {
-                conditions.push(ApplicationCondition::post_script_failed(&format!("{e}")));
-                futures::executor::block_on(async {
-                    recorder
-                        .publish(Event {
-                            type_: EventType::Warning,
-                            reason: "change-script failed".into(),
-                            note: Some(format!("change-script failed with: {e}")),
-                            action: "change-script".into(),
-                            secondary: None,
-                        })
-                        .await
-                        .map_err(Error::KubeError)
-                        .unwrap();
-                });
-                json!({})
-            });
-            // Validate that change-script went Ok
-            if cnd
-                .iter()
-                .any(|c| c.condition_type != ConditionsType::InputMissing)
-            {
-                let msg = "Change-script failed";
-                conditions.push(ApplicationCondition::not_ready(msg));
-                let new_status = Patch::Apply(json!({
-                    "apiVersion": "kuberest.solidite.fr/v1",
-                    "kind": "RestEndPoint",
-                    "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
-                }));
-                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                let _o = restendpoints
-                    .patch_status(&name, &ps, &new_status)
-                    .await
-                    .map_err(Error::KubeError)?;
-                return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.clone().unwrap_or(15 * 60),
-                )));
-            }
-        }
-
         // Handle each Writes
         let mut target_new: Vec<OwnedRestPoint> = Vec::new();
         if let Some(writes) = self.spec.writes.clone() {
@@ -1006,7 +982,7 @@ impl RestEndPoint {
                                             group.name.clone(),
                                             item.name
                                         ),
-                                        note: Some(format!("{e}")),
+                                        note: Some(format!("{e:?}")),
                                         action: "writing".into(),
                                         secondary: None,
                                     })
@@ -1016,7 +992,7 @@ impl RestEndPoint {
                             })
                         });
                         conditions.push(ApplicationCondition::write_failed(&format!(
-                            "Templating write.{}.{}.values raised {e}",
+                            "Templating write.{}.{}.values raised {e:?}",
                             group.name.clone(),
                             item.name
                         )));
@@ -1095,7 +1071,7 @@ impl RestEndPoint {
                                                             group.name.clone(),
                                                             item.name
                                                         ),
-                                                        note: Some(format!("{e}")),
+                                                        note: Some(format!("{e:?}")),
                                                         action: "updating".into(),
                                                         secondary: None,
                                                     })
@@ -1105,7 +1081,7 @@ impl RestEndPoint {
                                             })
                                         });
                                         conditions.push(ApplicationCondition::write_failed(&format!(
-                                            "Updating write.{}.{} raised {e}",
+                                            "Updating write.{}.{} raised {e:?}",
                                             group.name.clone(),
                                             item.name
                                         )));
@@ -1167,7 +1143,7 @@ impl RestEndPoint {
                                                         group.name.clone(),
                                                         item.name
                                                     ),
-                                                    note: Some(format!("{e}")),
+                                                    note: Some(format!("{e:?}")),
                                                     action: "creating".into(),
                                                     secondary: None,
                                                 })
@@ -1177,7 +1153,7 @@ impl RestEndPoint {
                                         })
                                     });
                                     conditions.push(ApplicationCondition::write_failed(&format!(
-                                        "Creating write.{}.{} raised {e}",
+                                        "Creating write.{}.{} raised {e:?}",
                                         group.name.clone(),
                                         item.name
                                     )));
@@ -1249,8 +1225,12 @@ impl RestEndPoint {
                         if !self.spec.client.teardown.clone().unwrap_or(false) && !giveup {
                             target_new.push(old.clone());
                             conditions.push(ApplicationCondition::write_delete_failed(
-                                &format!("Deleting write.{}.{} {e}", old.group.as_str(), old.name.as_str())
-                                    .as_str(),
+                                &format!(
+                                    "Deleting write.{}.{} {e:?}",
+                                    old.group.as_str(),
+                                    old.name.as_str()
+                                )
+                                .as_str(),
                             ));
                         }
                         target_new.push(old.clone());
@@ -1260,7 +1240,7 @@ impl RestEndPoint {
                                     .publish(Event {
                                         type_: EventType::Warning,
                                         reason: format!("Failed deleting: write.{}.{}", old.group, old.name),
-                                        note: Some(format!("{e}")),
+                                        note: Some(format!("{e:?}")),
                                         action: "deleting".into(),
                                         secondary: None,
                                     })
@@ -1302,13 +1282,13 @@ impl RestEndPoint {
         if let Some(script) = self.spec.post.clone() {
             let cnd = conditions.clone();
             values["post"] = rhai.eval(&script).unwrap_or_else(|e| {
-                conditions.push(ApplicationCondition::post_script_failed(&format!("{e}")));
+                conditions.push(ApplicationCondition::post_script_failed(&format!("{e:?}")));
                 futures::executor::block_on(async {
                     recorder
                         .publish(Event {
                             type_: EventType::Warning,
                             reason: "post-script failed".into(),
-                            note: Some(format!("post-script failed with: {e}")),
+                            note: Some(format!("post-script failed with: {e:?}")),
                             action: "post-script".into(),
                             secondary: None,
                         })
@@ -1626,7 +1606,7 @@ impl RestEndPoint {
                                                 "Failed deleting: {}.{}",
                                                 obj.namespace, obj.name
                                             ),
-                                            note: Some(format!("{e}")),
+                                            note: Some(format!("{e:?}")),
                                             action: "deleting".into(),
                                             secondary: None,
                                         })
@@ -1655,7 +1635,7 @@ impl RestEndPoint {
                                                 "Failed deleting: {}.{}",
                                                 obj.namespace, obj.name
                                             ),
-                                            note: Some(format!("{e}")),
+                                            note: Some(format!("{e:?}")),
                                             action: "deleting".into(),
                                             secondary: None,
                                         })
@@ -1734,7 +1714,7 @@ impl RestEndPoint {
                                     .publish(Event {
                                         type_: EventType::Warning,
                                         reason: format!("Failed register template: template.{}", item.name),
-                                        note: Some(format!("{e}")),
+                                        note: Some(format!("{e:?}")),
                                         action: "registering".into(),
                                         secondary: None,
                                     })
@@ -1744,7 +1724,7 @@ impl RestEndPoint {
                             })
                         });
                         conditions.push(ApplicationCondition::template_failed(&format!(
-                            "Registering template.{} raised {e}",
+                            "Registering template.{} raised {e:?}",
                             item.name
                         )));
                     });
@@ -1947,6 +1927,27 @@ impl RestEndPoint {
             }
         }
         rest.add_header_json();
+        if let Some(ca) = self.spec.client.server_ca.clone() {
+            rest.set_server_ca(&template!(&ca.as_str(), hbs, &values, conditions, recorder));
+        }
+        if self.spec.client.client_cert.is_some() && self.spec.client.client_key.is_some() {
+            rest.set_mtls(
+                &template!(
+                    &self.spec.client.client_cert.clone().unwrap().as_str(),
+                    hbs,
+                    &values,
+                    conditions,
+                    recorder
+                ),
+                &template!(
+                    &self.spec.client.client_key.clone().unwrap().as_str(),
+                    hbs,
+                    &values,
+                    conditions,
+                    recorder
+                ),
+            );
+        }
         rhai.ctx.set_or_push("client", rest.clone());
 
         let mut owned_new: Vec<OwnedObjects> = Vec::new();
@@ -1955,15 +1956,15 @@ impl RestEndPoint {
         // Start the teardown script
         if let Some(script) = self.spec.teardown.clone() {
             let cnd = conditions.clone();
-            rhai.eval(&script).unwrap_or_else(|e| {
-                conditions.push(ApplicationCondition::post_script_failed(&format!("{e}")));
+            values["pre"] = rhai.eval(&script).unwrap_or_else(|e| {
+                conditions.push(ApplicationCondition::post_script_failed(&format!("{e:?}")));
                 futures::executor::block_on(async {
                     recorder
                         .publish(Event {
                             type_: EventType::Warning,
-                            reason: "post-script failed".into(),
-                            note: Some(format!("post-script failed with: {e}")),
-                            action: "post-script".into(),
+                            reason: "teardown-script failed".into(),
+                            note: Some(format!("teardown-script failed with: {e:?}")),
+                            action: "teardown-script".into(),
                             secondary: None,
                         })
                         .await
@@ -1972,6 +1973,7 @@ impl RestEndPoint {
                 });
                 json!({})
             });
+            values["teardown"] = values["pre"].clone();
             // Validate that teardown went Ok
             if cnd
                 .iter()
@@ -2011,7 +2013,7 @@ impl RestEndPoint {
                                 target_new.push(obj.clone());
                                 conditions.push(ApplicationCondition::write_delete_failed(
                                     &format!(
-                                        "Deleting write.{}.{} {e}",
+                                        "Deleting write.{}.{} {e:?}",
                                         obj.group.as_str(),
                                         obj.name.as_str()
                                     )
@@ -2027,7 +2029,7 @@ impl RestEndPoint {
                                                 "Failed deleting: write.{}.{}",
                                                 obj.group, obj.name
                                             ),
-                                            note: Some(format!("{e}")),
+                                            note: Some(format!("{e:?}")),
                                             action: "deleting".into(),
                                             secondary: None,
                                         })
@@ -2058,7 +2060,7 @@ impl RestEndPoint {
                                                 "Failed deleting: {}.{}",
                                                 obj.namespace, obj.name
                                             ),
-                                            note: Some(format!("{e}")),
+                                            note: Some(format!("{e:?}")),
                                             action: "deleting".into(),
                                             secondary: None,
                                         })
@@ -2087,7 +2089,7 @@ impl RestEndPoint {
                                                 "Failed deleting: {}.{}",
                                                 obj.namespace, obj.name
                                             ),
-                                            note: Some(format!("{e}")),
+                                            note: Some(format!("{e:?}")),
                                             action: "deleting".into(),
                                             secondary: None,
                                         })

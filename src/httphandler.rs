@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::{Error, Error::*, get_client_name};
+use crate::{get_client_name, Error, Error::*};
 use actix_web::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Certificate, Client, Response};

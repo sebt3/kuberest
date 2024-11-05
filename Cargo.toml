@@ -46,27 +46,27 @@ default = []
 telemetry = ["tonic", "opentelemetry-otlp"]
 
 [dependencies]
-actix-web = "4.4.0"
+actix-web = "4.9.0"
 futures = "0.3.28"
-tokio = { version = "1.32.0", features = ["macros", "rt-multi-thread"] }
-k8s-openapi = { version = "0.22.0", features = ["latest"] }
+tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread"] }
+k8s-openapi = { version = "0.23.0", features = ["latest"] }
 schemars = { version = "0.8.12", features = ["chrono"] }
-serde = { version = "1.0.185", features = ["derive"] }
+serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.105"
 serde_yaml = "0.9.25"
-prometheus = "0.13.3"
-chrono = { version = "0.4.26", features = ["serde"] }
+prometheus = "0.13.4"
+chrono = { version = "0.4.38", features = ["serde"] }
 tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.17", features = ["json", "env-filter"] }
-tracing-opentelemetry = "0.20.0"
-opentelemetry = { version = "0.20.0", features = ["trace", "rt-tokio"] }
-opentelemetry-otlp = { version = "0.13.0", features = ["tokio"], optional = true }
-tonic = { version = "0.9", optional = true }
-thiserror = "1.0.47"
+tracing-subscriber = { version = "0.3.18", features = ["json", "env-filter"] }
+tracing-opentelemetry = "0.27.0"
+opentelemetry = { version = "0.26.0", features = ["trace"] }
+opentelemetry-otlp = { version = "0.26.0", features = ["tokio"], optional = true }
+tonic = { version = "0.12", optional = true }
+thiserror = "1.0.65"
 anyhow = "1.0.75"
-handlebars =  { version = "5.1.2", features = ["script_helper", "string_helpers"] }
-handlebars_misc_helpers = { version = "0.16.3", features = ["string", "json", "jsonnet", "regex", "uuid"] }
-rhai = { version = "1.18.0", features = ["sync", "serde"] }
+handlebars =  { version = "6.2.0", features = ["script_helper", "string_helpers"] }
+handlebars_misc_helpers = { version = "0.17.0", features = ["string", "json", "jsonnet", "regex", "uuid"] }
+rhai = { version = "1.20.0", features = ["sync", "serde"] }
 reqwest = { version = "0.12.4", features = ["rustls-tls"] }
 base64 = "0.22.1"
 rand = "0.8.5"
@@ -79,4 +79,4 @@ tower-test = "0.4.0"
 
 [dependencies.kube]
 features = ["runtime", "client", "derive" ]
-version = "0.91.0"
+version = "0.96.0"

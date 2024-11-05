@@ -28,6 +28,9 @@ use tokio::{runtime::Handle, sync::RwLock, time::Duration};
 use tracing::*;
 
 pub static RESTPATH_FINALIZER: &str = "restendpoints.kuberest.solidite.fr";
+pub fn get_client_name() -> String {
+    RESTPATH_FINALIZER.to_string()
+}
 
 /// ConfigMapRef describe a data input for handlebars renders from a ConfigMap
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]

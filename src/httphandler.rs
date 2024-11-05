@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use crate::{Error, Error::*, RESTPATH_FINALIZER};
+use crate::{Error, Error::*, get_client_name};
 use actix_web::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Certificate, Client, Response};
@@ -140,13 +140,13 @@ impl RestClient {
         let five_sec = std::time::Duration::from_secs(60 * 5);
         if self.server_ca.is_none() && (self.client_cert.is_none() || self.client_key.is_none()) {
             Client::builder()
-                .user_agent(RESTPATH_FINALIZER)
+                .user_agent(&get_client_name())
                 .timeout(five_sec)
                 .build()
         } else if self.client_cert.is_none() || self.client_key.is_none() {
             match Certificate::from_pem(self.server_ca.clone().unwrap().as_bytes()) {
                 Ok(c) => Client::builder()
-                    .user_agent(RESTPATH_FINALIZER)
+                    .user_agent(&get_client_name())
                     .timeout(five_sec)
                     .add_root_certificate(c)
                     .use_rustls_tls()
@@ -164,7 +164,7 @@ impl RestClient {
                 Ok(identity) => {
                     if self.server_ca.is_none() {
                         Client::builder()
-                            .user_agent(RESTPATH_FINALIZER)
+                            .user_agent(&get_client_name())
                             .timeout(five_sec)
                             .use_rustls_tls()
                             .identity(identity)
@@ -172,7 +172,7 @@ impl RestClient {
                     } else {
                         match Certificate::from_pem(self.server_ca.clone().unwrap().as_bytes()) {
                             Ok(c) => Client::builder()
-                                .user_agent(RESTPATH_FINALIZER)
+                                .user_agent(&get_client_name())
                                 .timeout(five_sec)
                                 .add_root_certificate(c)
                                 .use_rustls_tls()

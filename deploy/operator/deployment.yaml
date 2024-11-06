@@ -25,6 +25,9 @@ rules:
   - apiGroups: [""]
     resources: ["secrets", "configmaps"]
     verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create"]
@@ -112,6 +115,8 @@ spec:
           value: info,kube=debug,controller=debug
         - name: MULTI_TENANT
           value: "true"
+        - name: TENANT_LABEL
+          value: "kuberest.solidite.fr/tenant"
         readinessProbe:
           httpGet:
             path: /health

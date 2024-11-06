@@ -71,7 +71,7 @@ kubectl wait -n kuberest --for=condition=available deploy/kuberest --timeout=30s
 
 ### Tenant aware
 
-The controller can either function per-namespace (refuse to read secrets from other namespace mostly) or behave globally. The default behaviour is to limit to current namespace, to activate, set the environement variable MULTI_TENANT to false (or tenants.enabled=false for the chart)
+The controller can either function per-tenant (refuse to read secrets from namespace that doesnt share the same label mostly) or behave globally. The default behaviour is to limit to current tenant, to activate, set the environement variable MULTI_TENANT to false (or tenants.enabled=false for the chart). You can also select the common label value using the variable TENANT_LABEL (or tenants.label for the chart).
 
 ## Usage
 Please see the [documentation](https://sebt3.github.io/kuberest/docs/)

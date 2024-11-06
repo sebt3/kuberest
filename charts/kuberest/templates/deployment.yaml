@@ -49,6 +49,8 @@ spec:
         {{- end }}
         - name: MULTI_TENANT
           value: "{{ .Values.tenants.enabled }}"
+        - name: TENANT_LABEL
+          value: "{{ .Values.tenants.label }}"
         {{- with .Values.env }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

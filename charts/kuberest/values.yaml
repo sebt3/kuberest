@@ -53,6 +53,7 @@ logging:
 # set to false if you want to use Secrets across-namespaces (unsafe in a multi-tenants cluster)
 tenants:
   enabled: true
+  label: "kuberest.solidite.fr/tenant"
 
 env: []
 

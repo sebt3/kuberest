@@ -9,6 +9,7 @@ use crate::{
 };
 use chrono::{self, DateTime, Utc};
 use futures::StreamExt;
+use k8s_openapi::api::core::v1::Namespace;
 use kube::{
     api::{Api, ListParams, Patch, PatchParams, ResourceExt},
     client::Client,
@@ -528,6 +529,29 @@ impl RestEndPoint {
         }
     }
 
+    async fn get_tenant_namespaces(&self, client: Client) -> Result<Vec<String>> {
+        let my_ns = self.metadata.namespace.clone().unwrap();
+        let ns_api: Api<Namespace> = Api::all(client);
+        let my_ns_meta = ns_api.get_metadata(&my_ns).await.map_err(Error::KubeError)?;
+        let label_key =
+            std::env::var("TENANT_LABEL").unwrap_or_else(|_| "kuberest.solidite.fr/tenant".to_string());
+        let res = vec![my_ns];
+        if let Some(labels) = my_ns_meta.metadata.labels.clone() {
+            if labels.clone().keys().into_iter().any(|k| k == &label_key) {
+                let tenant_name = &labels[&label_key];
+                let mut lp = ListParams::default();
+                lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
+                let my_nss = ns_api.list_metadata(&lp).await.map_err(Error::KubeError)?;
+                return Ok(my_nss
+                    .items
+                    .into_iter()
+                    .map(|n| n.metadata.name.unwrap())
+                    .collect());
+            }
+        }
+        Ok(res)
+    }
+
     // Reconcile (for non-finalizer related changes)
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
         // Before everything : is this reconcillation because of our last status update ?
@@ -550,7 +574,7 @@ impl RestEndPoint {
         let recorder = ctx.diagnostics.read().await.recorder(client.clone(), self);
         let ns = self.namespace().unwrap();
         let name = self.name_any();
-        let restendpoints: Api<RestEndPoint> = Api::namespaced(client, &ns);
+        let restendpoints: Api<RestEndPoint> = Api::namespaced(client.clone(), &ns);
         let mut conditions: Vec<ApplicationCondition> = Vec::new();
         let mut values = serde_json::json!({"input":{},"pre":{},"read":{},"write":{},"post":{}});
         let mut hbs = HandleBars::new();
@@ -582,26 +606,37 @@ impl RestEndPoint {
         }
         let mut rhai = Script::new();
         rhai.ctx.set_or_push("hbs", hbs.clone());
+        let use_multi = std::env::var("MULTI_TENANT")
+            .unwrap_or_else(|_| "true".to_string())
+            .to_lowercase()
+            == "true".to_string();
+        let allowed = if use_multi && (self.spec.inputs.is_some() || self.spec.outputs.is_some()) {
+            self.get_tenant_namespaces(client.clone()).await?
+        } else {
+            Vec::new()
+        };
 
         // Read the inputs first
         if let Some(inputs) = self.spec.clone().inputs {
             for input in inputs {
                 if let Some(secret) = input.secret_ref {
-                    let my_ns = if std::env::var("MULTI_TENANT")
-                        .unwrap_or_else(|_| "true".to_string())
-                        .to_lowercase()
-                        == "true".to_string()
-                    {
-                        if secret.namespace.is_some() {
-                            recorder.publish(Event {
-                                type_: EventType::Warning,
-                                reason: "IgnoredNamespace".into(),
-                                note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            }).await.map_err(Error::KubeError)?;
+                    let my_ns = if use_multi {
+                        if let Some(o_ns) = secret.namespace.clone() {
+                            if allowed.contains(&o_ns) {
+                                o_ns
+                            } else {
+                                recorder.publish(Event {
+                                    type_: EventType::Warning,
+                                    reason: "IgnoredNamespace".into(),
+                                    note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
+                                    action: "readingInput".into(),
+                                    secondary: None,
+                                }).await.map_err(Error::KubeError)?;
+                                ns.clone()
+                            }
+                        } else {
+                            ns.clone()
                         }
-                        ns.clone()
                     } else if let Some(local_ns) = secret.namespace {
                         local_ns
                     } else {
@@ -650,21 +685,23 @@ impl RestEndPoint {
                         )));
                     }
                 } else if let Some(cfgmap) = input.config_map_ref {
-                    let my_ns = if std::env::var("MULTI_TENANT")
-                        .unwrap_or_else(|_| "true".to_string())
-                        .to_lowercase()
-                        == "true".to_string()
-                    {
-                        if cfgmap.namespace.is_some() {
-                            recorder.publish(Event {
-                                type_: EventType::Warning,
-                                reason: "IgnoredNamespace".into(),
-                                note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            }).await.map_err(Error::KubeError)?;
+                    let my_ns = if use_multi {
+                        if let Some(o_ns) = cfgmap.namespace.clone() {
+                            if allowed.contains(&o_ns) {
+                                o_ns
+                            } else {
+                                recorder.publish(Event {
+                                    type_: EventType::Warning,
+                                    reason: "IgnoredNamespace".into(),
+                                    note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
+                                    action: "readingInput".into(),
+                                    secondary: None,
+                                }).await.map_err(Error::KubeError)?;
+                                ns.clone()
+                            }
+                        } else {
+                            ns.clone()
                         }
-                        ns.clone()
                     } else if let Some(local_ns) = cfgmap.namespace {
                         local_ns
                     } else {
@@ -1328,21 +1365,23 @@ impl RestEndPoint {
         let mut owned_new: Vec<OwnedObjects> = Vec::new();
         if let Some(outputs) = self.spec.outputs.clone() {
             for output in outputs {
-                let my_ns = if std::env::var("MULTI_TENANT")
-                    .unwrap_or_else(|_| "true".to_string())
-                    .to_lowercase()
-                    == "true".to_string()
-                {
-                    if output.metadata.namespace.is_some() {
-                        recorder.publish(Event {
-                            type_: EventType::Warning,
-                            reason: "IgnoredNamespace".into(),
-                            note: Some(format!("Ignoring namespace from Output '{}' as the operator run in multi-tenant mode",output.metadata.name)),
-                            action: "readingInput".into(),
-                            secondary: None,
-                        }).await.map_err(Error::KubeError)?;
+                let my_ns = if use_multi {
+                    if let Some(o_ns) = output.metadata.namespace.clone() {
+                        if allowed.contains(&o_ns) {
+                            o_ns
+                        } else {
+                            recorder.publish(Event {
+                                type_: EventType::Warning,
+                                reason: "IgnoredNamespace".into(),
+                                note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",output.metadata.name)),
+                                action: "readingInput".into(),
+                                secondary: None,
+                            }).await.map_err(Error::KubeError)?;
+                            ns.clone()
+                        }
+                    } else {
+                        ns.clone()
                     }
-                    ns.clone()
                 } else if let Some(local_ns) = output.clone().metadata.namespace {
                     local_ns
                 } else {
@@ -1703,7 +1742,7 @@ impl RestEndPoint {
         let recorder = Recorder::new(client.clone(), reporter, self.object_ref(&()));
         let ns = self.namespace().unwrap();
         let name = self.name_any();
-        let restendpoints: Api<RestEndPoint> = Api::namespaced(client, &ns);
+        let restendpoints: Api<RestEndPoint> = Api::namespaced(client.clone(), &ns);
         let mut conditions: Vec<ApplicationCondition> = Vec::new();
         let mut values = serde_json::json!({"input":{},"pre":{}});
         let mut hbs = HandleBars::new();
@@ -1733,27 +1772,38 @@ impl RestEndPoint {
                     });
             }
         }
+        let use_multi = std::env::var("MULTI_TENANT")
+            .unwrap_or_else(|_| "true".to_string())
+            .to_lowercase()
+            == "true".to_string();
+        let allowed = if use_multi && (self.spec.inputs.is_some() || self.spec.outputs.is_some()) {
+            self.get_tenant_namespaces(client.clone()).await?
+        } else {
+            Vec::new()
+        };
         let mut rhai = Script::new();
         rhai.ctx.set_or_push("hbs", hbs.clone());
         // Read the inputs first
         if let Some(inputs) = self.spec.clone().inputs {
             for input in inputs {
                 if let Some(secret) = input.secret_ref {
-                    let my_ns = if std::env::var("MULTI_TENANT")
-                        .unwrap_or_else(|_| "true".to_string())
-                        .to_lowercase()
-                        == "true".to_string()
-                    {
-                        if secret.namespace.is_some() {
-                            recorder.publish(Event {
-                                type_: EventType::Warning,
-                                reason: "IgnoredNamespace".into(),
-                                note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            }).await.map_err(Error::KubeError)?;
+                    let my_ns = if use_multi {
+                        if let Some(o_ns) = secret.namespace.clone() {
+                            if allowed.contains(&o_ns) {
+                                o_ns
+                            } else {
+                                recorder.publish(Event {
+                                    type_: EventType::Warning,
+                                    reason: "IgnoredNamespace".into(),
+                                    note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
+                                    action: "readingInput".into(),
+                                    secondary: None,
+                                }).await.map_err(Error::KubeError)?;
+                                ns.clone()
+                            }
+                        } else {
+                            ns.clone()
                         }
-                        ns.clone()
                     } else if let Some(local_ns) = secret.namespace {
                         local_ns
                     } else {
@@ -1802,21 +1852,23 @@ impl RestEndPoint {
                         )));
                     }
                 } else if let Some(cfgmap) = input.config_map_ref {
-                    let my_ns = if std::env::var("MULTI_TENANT")
-                        .unwrap_or_else(|_| "true".to_string())
-                        .to_lowercase()
-                        == "true".to_string()
-                    {
-                        if cfgmap.namespace.is_some() {
-                            recorder.publish(Event {
-                                type_: EventType::Warning,
-                                reason: "IgnoredNamespace".into(),
-                                note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            }).await.map_err(Error::KubeError)?;
+                    let my_ns = if use_multi {
+                        if let Some(o_ns) = cfgmap.namespace.clone() {
+                            if allowed.contains(&o_ns) {
+                                o_ns
+                            } else {
+                                recorder.publish(Event {
+                                    type_: EventType::Warning,
+                                    reason: "IgnoredNamespace".into(),
+                                    note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
+                                    action: "readingInput".into(),
+                                    secondary: None,
+                                }).await.map_err(Error::KubeError)?;
+                                ns.clone()
+                            }
+                        } else {
+                            ns.clone()
                         }
-                        ns.clone()
                     } else if let Some(local_ns) = cfgmap.namespace {
                         local_ns
                     } else {

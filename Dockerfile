@@ -1,6 +1,6 @@
 ARG RUST_VERSION=1.77
 ARG DEBIAN_VERSION=bookworm
-FROM --platform=${BUILDPLATFORM:-linux/amd64} rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} as builder
+FROM --platform=${BUILDPLATFORM:-linux/amd64} rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS builder
 ARG BUILD_DEPS="binutils libssl-dev pkg-config git build-essential"
 ARG FEATURES=""
 # hadolint ignore=DL3027,DL3008,DL3015
@@ -15,7 +15,7 @@ COPY . .
 RUN CARGO_NET_GIT_FETCH_WITH_CLI=true cargo build $FEATURES --release --bin controller \
  && strip target/release/controller
 
-FROM --platform=${BUILDPLATFORM:-linux/amd64} debian:${DEBIAN_VERSION}-slim as target
+FROM --platform=${BUILDPLATFORM:-linux/amd64} debian:${DEBIAN_VERSION}-slim AS target
 ARG DEB_PACKAGES="openssl ca-certificates"
 # hadolint ignore=DL3027,DL3008
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \

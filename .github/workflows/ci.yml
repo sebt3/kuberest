@@ -12,16 +12,16 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       # Setup qemu for multi-arch support
       - name: Docker Setup qemu-action
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
       # Build and push with docker buildx
       - name: Setup docker buildx
         uses: docker/setup-buildx-action@v2
 
       - name: Configure tags based on git tags + latest
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         id: meta
         with:
           images: ${{ github.repository_owner }}/kuberest
@@ -32,14 +32,14 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Docker login on main origin
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker buildx
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           cache-from: type=gha,scope=base
@@ -50,7 +50,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
 
       - name: Persist base image build to a tarball
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
@@ -59,7 +59,7 @@ jobs:
           outputs: type=docker,dest=/tmp/image.tar
 
       - name: Upload base docker image as artifact for e2e tests
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: controller-image
           path: /tmp/image.tar
@@ -67,16 +67,16 @@ jobs:
   otel-docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       # Setup qemu for multi-arch support
       - name: Docker Setup qemu-action
         uses: docker/setup-qemu-action@v2
       # Build and push with docker buildx
       - name: Setup docker buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Configure tags based on git tags + latest
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         id: meta
         with:
           images: ${{ github.repository_owner }}/kuberest
@@ -87,14 +87,14 @@ jobs:
             type=ref,event=pr
 
       - name: Docker login on main origin
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Docker buildx
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           cache-from: type=gha,scope=otel
@@ -110,10 +110,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: [docker]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: nolar/setup-k3d-k3s@v1
         with:
-          version: v1.27
+          version: v1.30
           k3d-name: kube
           k3d-args: "--no-lb --no-rollback --k3s-arg --disable=traefik,servicelb,metrics-server@server:*"
       - run: kubectl apply -k deploy/crd
@@ -148,7 +148,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install protoc
         run: sudo apt-get install -y protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
@@ -166,12 +166,12 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: nolar/setup-k3d-k3s@v1
         with:
-          version: v1.25
+          version: v1.30
           k3d-name: kube
           k3d-args: "--no-lb --no-rollback --k3s-arg --disable=traefik,servicelb,metrics-server@server:*"
 
@@ -185,7 +185,7 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 2
       - uses: dtolnay/rust-toolchain@stable

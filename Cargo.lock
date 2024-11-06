@@ -1773,6 +1773,7 @@ dependencies = [
  "kube",
  "opentelemetry",
  "opentelemetry-otlp",
+ "opentelemetry_sdk",
  "prometheus",
  "rand",
  "reqwest",
@@ -1783,7 +1784,6 @@ dependencies = [
  "serde_yaml",
  "thiserror",
  "tokio",
- "tonic",
  "tower-test",
  "tracing",
  "tracing-opentelemetry",
@@ -2091,6 +2091,8 @@ dependencies = [
  "rand",
  "serde_json",
  "thiserror",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

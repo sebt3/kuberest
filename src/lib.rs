@@ -5,6 +5,9 @@ pub enum Error {
     #[error("SerializationError: {0}")]
     SerializationError(#[source] serde_json::Error),
 
+    #[error("YamlError: {0}")]
+    YamlError(#[source] serde_yaml::Error),
+
     #[error("K8s error: {0}")]
     KubeError(#[source] kube::Error),
 
@@ -30,6 +33,9 @@ pub enum Error {
     #[error("{0} query failed: {1}")]
     MethodFailed(String, u16, String),
 
+    #[error("Argon2 password_hash error {0}")]
+    Argon2hash(#[source] argon2::password_hash::Error),
+
     #[error("Unsupported method")]
     UnsupportedMethod,
 
@@ -46,6 +52,10 @@ impl Error {
         format!("{self:?}").to_lowercase()
     }
 }
+pub type RhaiRes<T> = std::result::Result<T, Box<rhai::EvalAltResult>>;
+pub fn rhai_err(e: Error) -> Box<rhai::EvalAltResult> {
+    format!("{e}").into()
+}
 
 /// Expose all restpath components used by main
 pub mod restendpoint;
@@ -59,6 +69,7 @@ mod metrics;
 pub use metrics::Metrics;
 
 mod handlebarshandler;
+pub mod hasheshandlers;
 mod httphandler;
 mod k8shandlers;
 mod passwordhandler;

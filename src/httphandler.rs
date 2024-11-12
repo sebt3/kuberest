@@ -1,6 +1,4 @@
-use std::str::FromStr;
-
-use crate::{get_client_name, Error, Error::*};
+use crate::{get_client_name, Error, Error::*, RhaiRes};
 use actix_web::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Certificate, Client, Response};
@@ -47,8 +45,8 @@ pub struct RestClient {
 
 impl RestClient {
     #[must_use]
-    pub fn new(base: &str) -> RestClient {
-        RestClient {
+    pub fn new(base: &str) -> Self {
+        Self {
             baseurl: base.to_string(),
             headers: Map::new(),
             server_ca: None,
@@ -238,7 +236,7 @@ impl RestClient {
         Ok(json)
     }
 
-    pub fn rhai_get(&mut self, path: String) -> Map {
+    pub fn rhai_get(&mut self, path: String) -> RhaiRes<Map> {
         let mut ret = Map::new();
         match self.http_get(path.as_str()) {
             Ok(result) => {
@@ -248,24 +246,72 @@ impl RestClient {
                 );
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
+                        let headers = result
+                            .headers()
+                            .into_iter()
+                            .map(|(key, val)| {
+                                (
+                                    key.as_str().to_string(),
+                                    val.to_str().unwrap_or_default().to_string(),
+                                )
+                            })
+                            .collect::<Vec<(String, String)>>();
                         let text = result.text().await.unwrap();
                         ret.insert(
                             "json".to_string().into(),
                             serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
                         );
+                        ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        ret.into()
+                        Ok(ret.into())
                     })
                 })
             }
-            Err(e) => {
-                let mut res = Map::new();
-                res.insert(
-                    "error".to_string().into(),
-                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
-                );
-                res
+            Err(e) => Err(format!("{e}").into()),
+        }
+    }
+
+    pub fn http_head(&mut self, path: &str) -> std::result::Result<Response, reqwest::Error> {
+        debug!("http_get '{}' ", format!("{}/{}", self.baseurl, path));
+        match self.get_client() {
+            Ok(client) => {
+                let mut req = client.head(format!("{}/{}", self.baseurl, path));
+                for (key, val) in self.headers.clone() {
+                    req = req.header(key.to_string(), val.to_string());
+                }
+                tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
             }
+            Err(e) => {
+                if e.is_builder() {
+                    warn!("CLIENT: {e:?}");
+                }
+                Err(e)
+            }
+        }
+    }
+
+    pub fn rhai_head(&mut self, path: String) -> RhaiRes<Map> {
+        let mut ret = Map::new();
+        match self.http_head(path.as_str()) {
+            Ok(result) => {
+                ret.insert(
+                    "code".to_string().into(),
+                    Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
+                );
+                let headers = result
+                    .headers()
+                    .into_iter()
+                    .map(|(key, val)| {
+                        (
+                            key.as_str().to_string(),
+                            val.to_str().unwrap_or_default().to_string(),
+                        )
+                    })
+                    .collect::<Vec<(String, String)>>();
+                ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
+                Ok(ret.into())
+            }
+            Err(e) => Err(format!("{e}").into()),
         }
     }
 
@@ -318,7 +364,7 @@ impl RestClient {
         Ok(json)
     }
 
-    pub fn rhai_patch(&mut self, path: String, val: Dynamic) -> Map {
+    pub fn rhai_patch(&mut self, path: String, val: Dynamic) -> RhaiRes<Map> {
         let body = if val.is_string() {
             val.to_string()
         } else {
@@ -333,24 +379,28 @@ impl RestClient {
                 );
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
+                        let headers = result
+                            .headers()
+                            .into_iter()
+                            .map(|(key, val)| {
+                                (
+                                    key.as_str().to_string(),
+                                    val.to_str().unwrap_or_default().to_string(),
+                                )
+                            })
+                            .collect::<Vec<(String, String)>>();
                         let text = result.text().await.unwrap();
                         ret.insert(
                             "json".to_string().into(),
                             serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
                         );
+                        ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        ret.into()
+                        Ok(ret.into())
                     })
                 })
             }
-            Err(e) => {
-                let mut res = Map::new();
-                res.insert(
-                    "error".to_string().into(),
-                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
-                );
-                res
-            }
+            Err(e) => Err(format!("{e}").into()),
         }
     }
 
@@ -403,7 +453,7 @@ impl RestClient {
         Ok(json)
     }
 
-    pub fn rhai_put(&mut self, path: String, val: Dynamic) -> Map {
+    pub fn rhai_put(&mut self, path: String, val: Dynamic) -> RhaiRes<Map> {
         let body = if val.is_string() {
             val.to_string()
         } else {
@@ -418,24 +468,28 @@ impl RestClient {
                 );
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
+                        let headers = result
+                            .headers()
+                            .into_iter()
+                            .map(|(key, val)| {
+                                (
+                                    key.as_str().to_string(),
+                                    val.to_str().unwrap_or_default().to_string(),
+                                )
+                            })
+                            .collect::<Vec<(String, String)>>();
                         let text = result.text().await.unwrap();
                         ret.insert(
                             "json".to_string().into(),
                             serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
                         );
+                        ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        ret.into()
+                        Ok(ret.into())
                     })
                 })
             }
-            Err(e) => {
-                let mut res = Map::new();
-                res.insert(
-                    "error".to_string().into(),
-                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
-                );
-                res
-            }
+            Err(e) => Err(format!("{e}").into()),
         }
     }
 
@@ -488,7 +542,7 @@ impl RestClient {
         Ok(json)
     }
 
-    pub fn rhai_post(&mut self, path: String, val: Dynamic) -> Map {
+    pub fn rhai_post(&mut self, path: String, val: Dynamic) -> RhaiRes<Map> {
         let body = if val.is_string() {
             val.to_string()
         } else {
@@ -503,24 +557,28 @@ impl RestClient {
                 );
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
+                        let headers = result
+                            .headers()
+                            .into_iter()
+                            .map(|(key, val)| {
+                                (
+                                    key.as_str().to_string(),
+                                    val.to_str().unwrap_or_default().to_string(),
+                                )
+                            })
+                            .collect::<Vec<(String, String)>>();
                         let text = result.text().await.unwrap();
                         ret.insert(
                             "json".to_string().into(),
                             serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
                         );
+                        ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        ret.into()
+                        Ok(ret.into())
                     })
                 })
             }
-            Err(e) => {
-                let mut res = Map::new();
-                res.insert(
-                    "error".to_string().into(),
-                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
-                );
-                res
-            }
+            Err(e) => Err(format!("{e}").into()),
         }
     }
 
@@ -570,7 +628,7 @@ impl RestClient {
         Ok(json)
     }
 
-    pub fn rhai_delete(&mut self, path: String) -> Map {
+    pub fn rhai_delete(&mut self, path: String) -> RhaiRes<Map> {
         let mut ret = Map::new();
         match self.http_delete(path.as_str()) {
             Ok(result) => {
@@ -580,24 +638,28 @@ impl RestClient {
                 );
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
+                        let headers = result
+                            .headers()
+                            .into_iter()
+                            .map(|(key, val)| {
+                                (
+                                    key.as_str().to_string(),
+                                    val.to_str().unwrap_or_default().to_string(),
+                                )
+                            })
+                            .collect::<Vec<(String, String)>>();
                         let text = result.text().await.unwrap();
                         ret.insert(
                             "json".to_string().into(),
                             serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
                         );
+                        ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
                         ret.insert("body".to_string().into(), Dynamic::from(text));
-                        ret.into()
+                        Ok(ret.into())
                     })
                 })
             }
-            Err(e) => {
-                let mut res = Map::new();
-                res.insert(
-                    "error".to_string().into(),
-                    Dynamic::from_str(&format!("{:}", e)).unwrap(),
-                );
-                res
-            }
+            Err(e) => Err(format!("{e}").into()),
         }
     }
 

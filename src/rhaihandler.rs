@@ -1,8 +1,15 @@
 use crate::{
-    handlebarshandler::HandleBars, httphandler::RestClient, passwordhandler::Passwords, Error, Error::*,
+    handlebarshandler::HandleBars,
+    hasheshandlers::Argon,
+    httphandler::RestClient,
+    passwordhandler::Passwords,
+    rhai_err,
+    Error::{self, *},
+    RhaiRes,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use rhai::{Dynamic, Engine, ImmutableString, Module, Scope};
+use rhai::{Dynamic, Engine, ImmutableString, Map, Module, Scope};
+use serde::Deserialize;
 
 #[derive(Debug)]
 pub struct Script {
@@ -40,24 +47,52 @@ impl Script {
             .register_fn("base64_encode", |val: ImmutableString| -> ImmutableString {
                 STANDARD.encode(val.to_string()).into()
             })
-            .register_fn("json_encode", |val: Dynamic| -> ImmutableString {
-                serde_json::to_string(&val).unwrap().into()
+            .register_fn("json_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
+                serde_json::to_string(&val)
+                    .map_err(|e| rhai_err(Error::SerializationError(e)))
+                    .map(|v| v.into())
             })
-            .register_fn("json_decode", |val: ImmutableString| -> Dynamic {
-                serde_json::from_str(&val.to_string()).unwrap()
+            .register_fn("json_encode_escape", |val: Dynamic| -> RhaiRes<ImmutableString> {
+                let str = serde_json::to_string(&val).map_err(|e| rhai_err(Error::SerializationError(e)))?;
+                Ok(format!("{:?}", str).into())
             })
-            .register_fn("yaml_encode", |val: &Dynamic| -> ImmutableString {
-                serde_yaml::to_string(val).unwrap().into()
+            .register_fn("json_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
+                serde_json::from_str(&val.to_string()).map_err(|e| rhai_err(Error::SerializationError(e)))
             })
-            .register_fn("yaml_decode", |val: ImmutableString| -> Dynamic {
-                serde_yaml::from_str(&val.to_string()).unwrap()
-            });
+            .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
+                serde_yaml::to_string(&val)
+                    .map_err(|e| rhai_err(Error::YamlError(e)))
+                    .map(|v| v.into())
+            })
+            .register_fn("yaml_encode", |val: Map| -> RhaiRes<ImmutableString> {
+                serde_yaml::to_string(&val)
+                    .map_err(|e| rhai_err(Error::YamlError(e)))
+                    .map(|v| v.into())
+            })
+            .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
+                serde_yaml::from_str(&val.to_string()).map_err(|e| rhai_err(Error::YamlError(e)))
+            })
+            .register_fn(
+                "yaml_decode_multi",
+                |val: ImmutableString| -> RhaiRes<Vec<Dynamic>> {
+                    let mut res = Vec::new();
+                    if val.len() > 5 {
+                        // non-empty string only
+                        for document in serde_yaml::Deserializer::from_str(&val.to_string()) {
+                            let doc =
+                                Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
+                            res.push(doc);
+                        }
+                    }
+                    Ok(res)
+                },
+            );
         script
             .engine
             .register_type_with_name::<HandleBars>("HandleBars")
             .register_fn("new_hbs", HandleBars::new)
-            .register_fn("register_template", HandleBars::register_template_rhai)
-            .register_fn("render_from", HandleBars::render_from_rhai);
+            .register_fn("register_template", HandleBars::rhai_register_template)
+            .register_fn("render_from", HandleBars::rhai_render);
         script
             .engine
             .register_type_with_name::<RestClient>("RestClient")
@@ -70,11 +105,22 @@ impl Script {
             .register_fn("add_header_json", RestClient::add_header_json)
             .register_fn("add_header_bearer", RestClient::add_header_bearer)
             .register_fn("add_header_basic", RestClient::add_header_basic)
+            .register_fn("head", RestClient::rhai_head)
+            .register_fn("get", RestClient::rhai_get)
+            .register_fn("delete", RestClient::rhai_delete)
+            .register_fn("patch", RestClient::rhai_patch)
+            .register_fn("post", RestClient::rhai_post)
+            .register_fn("put", RestClient::rhai_put)
             .register_fn("http_get", RestClient::rhai_get)
             .register_fn("http_delete", RestClient::rhai_delete)
             .register_fn("http_patch", RestClient::rhai_patch)
             .register_fn("http_post", RestClient::rhai_post)
             .register_fn("http_put", RestClient::rhai_put);
+        script
+            .engine
+            .register_type_with_name::<Argon>("Argon")
+            .register_fn("new_argon", Argon::new)
+            .register_fn("hash", Argon::rhai_hash);
         script.add_code("fn assert(cond, mess) {if (!cond){throw mess}}");
         script
     }

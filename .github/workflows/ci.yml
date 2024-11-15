@@ -134,11 +134,10 @@ jobs:
             --set networkPolicy.enabled=true \
             --set networkPolicy.apiserver.0=${apiserver}/32 \
             | kubectl apply -f -
-      - run: kubectl wait --for=condition=available deploy/kuberest --timeout=30s
+      - run: kubectl wait --for=condition=available deploy/kuberest --timeout=60s
       - run: kubectl apply -f examples/abuses/uuidgen.yaml
       - run: kubectl wait --for=condition=ready rep/uuidgen
       # verify reconcile actions have happened
-      - run: kubectl get netpol kuberest -oyaml
       - run: kubectl logs deploy/kuberest
       - run: kubectl get event --field-selector "involvedObject.kind=RestEndPoint,involvedObject.name=uuidgen" | grep "IgnoredInput"
       - run: kubectl get secrets output

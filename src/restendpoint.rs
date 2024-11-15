@@ -489,7 +489,7 @@ pub struct Context {
 #[instrument(skip(ctx, rest_path), fields(trace_id))]
 async fn reconcile(rest_path: Arc<RestEndPoint>, ctx: Arc<Context>) -> Result<Action> {
     let trace_id = telemetry::get_trace_id();
-    Span::current().record("trace_id", &field::display(&trace_id));
+    Span::current().record("trace_id", field::display(&trace_id));
     let _timer = ctx.metrics.count_and_measure();
     ctx.diagnostics.write().await.last_event = Utc::now();
     let ns = rest_path.namespace().unwrap();
@@ -537,7 +537,7 @@ impl RestEndPoint {
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "kuberest.solidite.fr/tenant".to_string());
         let res = vec![my_ns];
         if let Some(labels) = my_ns_meta.metadata.labels.clone() {
-            if labels.clone().keys().into_iter().any(|k| k == &label_key) {
+            if labels.clone().keys().any(|k| k == &label_key) {
                 let tenant_name = &labels[&label_key];
                 let mut lp = ListParams::default();
                 lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
@@ -556,7 +556,7 @@ impl RestEndPoint {
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
         // Before everything : is this reconcillation because of our last status update ?
         if let Some(status) = self.status.clone() {
-            let next = self.spec.check_frequency.clone().unwrap_or(15 * 60);
+            let next = self.spec.check_frequency.unwrap_or(15 * 60);
             let now = chrono::offset::Utc::now();
             if status.generation == self.metadata.generation.unwrap_or(1) {
                 let delta: u64 = (now - status.conditions[0].last_transition_time.unwrap_or(now))
@@ -609,7 +609,7 @@ impl RestEndPoint {
         let use_multi = std::env::var("MULTI_TENANT")
             .unwrap_or_else(|_| "true".to_string())
             .to_lowercase()
-            == "true".to_string();
+            == *"true";
         let allowed = if use_multi && (self.spec.inputs.is_some() || self.spec.outputs.is_some()) {
             self.get_tenant_namespaces(client.clone()).await?
         } else {
@@ -814,7 +814,7 @@ impl RestEndPoint {
                 .await
                 .map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.clone().unwrap_or(15 * 60),
+                self.spec.check_frequency.unwrap_or(15 * 60),
             )));
         }
         rhai.set_dynamic("input", &values["input"]);
@@ -877,7 +877,7 @@ impl RestEndPoint {
                 .await
                 .map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.clone().unwrap_or(15 * 60),
+                self.spec.check_frequency.unwrap_or(15 * 60),
             )));
         }
         rhai.ctx.set_or_push("client", rest.clone());
@@ -920,7 +920,7 @@ impl RestEndPoint {
                     .await
                     .map_err(Error::KubeError)?;
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.clone().unwrap_or(15 * 60),
+                    self.spec.check_frequency.unwrap_or(15 * 60),
                 )));
             }
         }
@@ -939,7 +939,7 @@ impl RestEndPoint {
                                 group.read_method.clone().unwrap_or(
                                     self.spec.client.read_method.clone().unwrap_or(ReadMethod::Get),
                                 ),
-                                &path.as_str(),
+                                path.as_str(),
                                 &template!(read.key.as_str(), hbs, &values, conditions, recorder),
                             )
                             .unwrap_or_else(|e| {
@@ -991,7 +991,7 @@ impl RestEndPoint {
                 .await
                 .map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.clone().unwrap_or(15 * 60),
+                self.spec.check_frequency.unwrap_or(15 * 60),
             )));
         }
         rhai.set_dynamic("read", &values["read"]);
@@ -1064,7 +1064,7 @@ impl RestEndPoint {
                                                     group.name.clone(),
                                                     item.name
                                                 ),
-                                                note: Some(format!("known key is empty")),
+                                                note: Some("known key is empty".to_string()),
                                                 action: "updating".into(),
                                                 secondary: None,
                                             })
@@ -1090,10 +1090,10 @@ impl RestEndPoint {
                                                 .clone()
                                                 .unwrap_or(UpdateMethod::Patch),
                                         ),
-                                        &path.as_str(),
+                                        path.as_str(),
                                         &myself.key,
                                         &vals,
-                                        group.key_use_slash.clone().unwrap_or(false),
+                                        group.key_use_slash.unwrap_or(false),
                                     )
                                     .unwrap_or_else(|e| {
                                         giveup = if let Error::MethodFailed(_, code, _) = e {
@@ -1157,7 +1157,7 @@ impl RestEndPoint {
                             let my_path = if group.key_use_slash.unwrap_or(false) {
                                 tmp.as_str()
                             } else {
-                                &path.as_str()
+                                path.as_str()
                             };
                             let obj = rest
                                 .clone()
@@ -1169,7 +1169,7 @@ impl RestEndPoint {
                                             .clone()
                                             .unwrap_or(CreateMethod::Post),
                                     ),
-                                    &my_path,
+                                    my_path,
                                     &vals,
                                 )
                                 .unwrap_or_else(|e| {
@@ -1228,13 +1228,13 @@ impl RestEndPoint {
                             let my_key = if group.key_use_slash.unwrap_or(false) {
                                 tmp.as_str()
                             } else {
-                                &key.as_str()
+                                key.as_str()
                             };
                             target_new.push(OwnedRestPoint::new(
                                 path.as_str(),
                                 my_key,
-                                &group.name.as_str(),
-                                &item.name.as_str(),
+                                group.name.as_str(),
+                                item.name.as_str(),
                                 item.teardown.unwrap_or(
                                     group
                                         .teardown
@@ -1262,10 +1262,10 @@ impl RestEndPoint {
                             false
                         };
                         // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
-                        if !self.spec.client.teardown.clone().unwrap_or(false) && !giveup {
+                        if !self.spec.client.teardown.unwrap_or(false) && !giveup {
                             target_new.push(old.clone());
                             conditions.push(ApplicationCondition::write_delete_failed(
-                                &format!(
+                                format!(
                                     "Deleting write.{}.{} {e:?}",
                                     old.group.as_str(),
                                     old.name.as_str()
@@ -1312,7 +1312,7 @@ impl RestEndPoint {
                 .await
                 .map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.clone().unwrap_or(15 * 60),
+                self.spec.check_frequency.unwrap_or(15 * 60),
             )));
         }
         rhai.set_dynamic("write", &values["write"]);
@@ -1356,7 +1356,7 @@ impl RestEndPoint {
                     .await
                     .map_err(Error::KubeError)?;
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.clone().unwrap_or(15 * 60),
+                    self.spec.check_frequency.unwrap_or(15 * 60),
                 )));
             }
         }
@@ -1455,54 +1455,52 @@ impl RestEndPoint {
                                 }
                             }
                         }
+                    } else if secrets.have(&output.metadata.name).await {
+                        let _ =
+                            update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
+                        if output.teardown.unwrap_or(true) {
+                            recorder
+                                .publish(Event {
+                                    type_: EventType::Warning,
+                                    reason: "OutputAlreadyExist".into(),
+                                    note: Some(format!(
+                                        "Secret output '{}.{}' already exist, won't take ownership.",
+                                        my_ns, output.metadata.name
+                                    )),
+                                    action: "outputSecret".into(),
+                                    secondary: None,
+                                })
+                                .await
+                                .map_err(Error::KubeError)?;
+                            conditions.push(ApplicationCondition::output_exist(&format!(
+                                "Secret output '{}.{}' already exist, won't take ownership.",
+                                my_ns, output.metadata.name
+                            )));
+                        }
                     } else {
-                        if secrets.have(&output.metadata.name).await {
-                            let _ =
-                                update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
-                            if output.teardown.unwrap_or(true) {
-                                recorder
-                                    .publish(Event {
-                                        type_: EventType::Warning,
-                                        reason: "OutputAlreadyExist".into(),
-                                        note: Some(format!(
-                                            "Secret output '{}.{}' already exist, won't take ownership.",
-                                            my_ns, output.metadata.name
-                                        )),
-                                        action: "outputSecret".into(),
-                                        secondary: None,
-                                    })
-                                    .await
-                                    .map_err(Error::KubeError)?;
-                                conditions.push(ApplicationCondition::output_exist(&format!(
-                                    "Secret output '{}.{}' already exist, won't take ownership.",
-                                    my_ns, output.metadata.name
-                                )));
-                            }
+                        let own = if output.teardown.unwrap_or(true)
+                            && my_ns == self.namespace().unwrap_or(my_ns.clone())
+                        {
+                            Some(self)
                         } else {
-                            let own = if output.teardown.unwrap_or(true)
-                                && my_ns == self.namespace().unwrap_or(my_ns.clone())
-                            {
-                                Some(self)
-                            } else {
-                                None
-                            };
-                            if let Some(sec) = create!(
-                                secrets,
-                                "Secret",
-                                own,
-                                output.clone(),
-                                my_ns,
-                                &my_values,
-                                conditions,
-                                recorder
-                            ) {
-                                if output.teardown.unwrap_or(true) {
-                                    owned_new.push(OwnedObjects::secret(
-                                        sec.metadata.name.unwrap().as_str(),
-                                        sec.metadata.namespace.unwrap().as_str(),
-                                        sec.metadata.uid.unwrap().as_str(),
-                                    ));
-                                }
+                            None
+                        };
+                        if let Some(sec) = create!(
+                            secrets,
+                            "Secret",
+                            own,
+                            output.clone(),
+                            my_ns,
+                            &my_values,
+                            conditions,
+                            recorder
+                        ) {
+                            if output.teardown.unwrap_or(true) {
+                                owned_new.push(OwnedObjects::secret(
+                                    sec.metadata.name.unwrap().as_str(),
+                                    sec.metadata.namespace.unwrap().as_str(),
+                                    sec.metadata.uid.unwrap().as_str(),
+                                ));
                             }
                         }
                     }
@@ -1574,54 +1572,52 @@ impl RestEndPoint {
                                 }
                             }
                         }
+                    } else if cms.have(&output.metadata.name).await {
+                        let _ =
+                            update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
+                        if output.teardown.unwrap_or(true) {
+                            recorder
+                                .publish(Event {
+                                    type_: EventType::Warning,
+                                    reason: "OutputAlreadyExist".into(),
+                                    note: Some(format!(
+                                        "ConfigMap output '{}.{}' already exist, won't take ownership.",
+                                        my_ns, output.metadata.name
+                                    )),
+                                    action: "outputConfigMap".into(),
+                                    secondary: None,
+                                })
+                                .await
+                                .map_err(Error::KubeError)?;
+                            conditions.push(ApplicationCondition::output_exist(&format!(
+                                "ConfigMap output '{}.{}' already exist, won't take ownership.",
+                                my_ns, output.metadata.name
+                            )));
+                        }
                     } else {
-                        if cms.have(&output.metadata.name).await {
-                            let _ =
-                                update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
-                            if output.teardown.unwrap_or(true) {
-                                recorder
-                                    .publish(Event {
-                                        type_: EventType::Warning,
-                                        reason: "OutputAlreadyExist".into(),
-                                        note: Some(format!(
-                                            "ConfigMap output '{}.{}' already exist, won't take ownership.",
-                                            my_ns, output.metadata.name
-                                        )),
-                                        action: "outputConfigMap".into(),
-                                        secondary: None,
-                                    })
-                                    .await
-                                    .map_err(Error::KubeError)?;
-                                conditions.push(ApplicationCondition::output_exist(&format!(
-                                    "ConfigMap output '{}.{}' already exist, won't take ownership.",
-                                    my_ns, output.metadata.name
-                                )));
-                            }
+                        let own = if output.teardown.unwrap_or(true)
+                            && my_ns == self.namespace().unwrap_or(my_ns.clone())
+                        {
+                            Some(self)
                         } else {
-                            let own = if output.teardown.unwrap_or(true)
-                                && my_ns == self.namespace().unwrap_or(my_ns.clone())
-                            {
-                                Some(self)
-                            } else {
-                                None
-                            };
-                            if let Some(sec) = create!(
-                                cms,
-                                "ConfigMap",
-                                own,
-                                output.clone(),
-                                my_ns,
-                                &my_values,
-                                conditions,
-                                recorder
-                            ) {
-                                if output.teardown.unwrap_or(true) {
-                                    owned_new.push(OwnedObjects::configmap(
-                                        sec.metadata.name.unwrap().as_str(),
-                                        sec.metadata.namespace.unwrap().as_str(),
-                                        sec.metadata.uid.unwrap().as_str(),
-                                    ));
-                                }
+                            None
+                        };
+                        if let Some(sec) = create!(
+                            cms,
+                            "ConfigMap",
+                            own,
+                            output.clone(),
+                            my_ns,
+                            &my_values,
+                            conditions,
+                            recorder
+                        ) {
+                            if output.teardown.unwrap_or(true) {
+                                owned_new.push(OwnedObjects::configmap(
+                                    sec.metadata.name.unwrap().as_str(),
+                                    sec.metadata.namespace.unwrap().as_str(),
+                                    sec.metadata.uid.unwrap().as_str(),
+                                ));
                             }
                         }
                     }
@@ -1730,7 +1726,7 @@ impl RestEndPoint {
                 .map_err(Error::KubeError)?;
         }
         Ok(Action::requeue(Duration::from_secs(
-            self.spec.check_frequency.clone().unwrap_or(15 * 60),
+            self.spec.check_frequency.unwrap_or(15 * 60),
         )))
     }
 
@@ -1775,7 +1771,7 @@ impl RestEndPoint {
         let use_multi = std::env::var("MULTI_TENANT")
             .unwrap_or_else(|_| "true".to_string())
             .to_lowercase()
-            == "true".to_string();
+            == *"true";
         let allowed = if use_multi && (self.spec.inputs.is_some() || self.spec.outputs.is_some()) {
             self.get_tenant_namespaces(client.clone()).await?
         } else {
@@ -2047,7 +2043,7 @@ impl RestEndPoint {
                     .await
                     .map_err(Error::KubeError)?;
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.clone().unwrap_or(15 * 60),
+                    self.spec.check_frequency.unwrap_or(15 * 60),
                 )));
             }
         }
@@ -2064,10 +2060,10 @@ impl RestEndPoint {
                                 false
                             };
                             // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
-                            if !self.spec.client.teardown.clone().unwrap_or(false) && !giveup {
+                            if !self.spec.client.teardown.unwrap_or(false) && !giveup {
                                 target_new.push(obj.clone());
                                 conditions.push(ApplicationCondition::write_delete_failed(
-                                    &format!(
+                                    format!(
                                         "Deleting write.{}.{} {e:?}",
                                         obj.group.as_str(),
                                         obj.name.as_str()
@@ -2167,8 +2163,8 @@ impl RestEndPoint {
             c.condition_type != ConditionsType::InputMissing
                 && c.condition_type != ConditionsType::WriteAlreadyExist
                 && c.condition_type != ConditionsType::OutputAlreadyExist
-        }) || owned_new.len() > 0
-            || target_new.len() > 0
+        }) || !owned_new.is_empty()
+            || !target_new.is_empty()
         {
             // Wait 30s before reporting the failure, because the controller keeps trying and it might hammer the api-server and the api-endpoint targeted otherwise. Beside the events generated already informed the user of the issue
             tokio::task::block_in_place(|| {

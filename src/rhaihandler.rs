@@ -57,7 +57,7 @@ impl Script {
                 Ok(format!("{:?}", str).into())
             })
             .register_fn("json_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_json::from_str(&val.to_string()).map_err(|e| rhai_err(Error::SerializationError(e)))
+                serde_json::from_str(val.as_ref()).map_err(|e| rhai_err(Error::SerializationError(e)))
             })
             .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
                 serde_yaml::to_string(&val)
@@ -70,7 +70,7 @@ impl Script {
                     .map(|v| v.into())
             })
             .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_yaml::from_str(&val.to_string()).map_err(|e| rhai_err(Error::YamlError(e)))
+                serde_yaml::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
             })
             .register_fn(
                 "yaml_decode_multi",
@@ -78,7 +78,7 @@ impl Script {
                     let mut res = Vec::new();
                     if val.len() > 5 {
                         // non-empty string only
-                        for document in serde_yaml::Deserializer::from_str(&val.to_string()) {
+                        for document in serde_yaml::Deserializer::from_str(val.as_ref()) {
                             let doc =
                                 Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
                             res.push(doc);

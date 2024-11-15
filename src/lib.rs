@@ -3,29 +3,29 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("SerializationError: {0}")]
-    SerializationError(#[source] serde_json::Error),
+    SerializationError(#[from] serde_json::Error),
 
     #[error("YamlError: {0}")]
-    YamlError(#[source] serde_yaml::Error),
+    YamlError(#[from] serde_yaml::Error),
 
     #[error("K8s error: {0}")]
-    KubeError(#[source] kube::Error),
+    KubeError(#[from] kube::Error),
 
     #[error("Finalizer error: {0}")]
     // NB: awkward type because finalizer::Error embeds the reconciler error (which is this)
     // so boxing this error to break cycles
-    FinalizerError(#[source] Box<kube::runtime::finalizer::Error<Error>>),
+    FinalizerError(#[from] Box<kube::runtime::finalizer::Error<Error>>),
 
     #[error("Registering template failed with error: {0}")]
-    HbsTemplateError(#[source] handlebars::TemplateError),
+    HbsTemplateError(#[from] handlebars::TemplateError),
     #[error("Renderer error: {0}")]
-    HbsRenderError(#[source] handlebars::RenderError),
+    HbsRenderError(#[from] handlebars::RenderError),
 
     #[error("Rhai script error: {0}")]
-    RhaiError(#[source] Box<rhai::EvalAltResult>),
+    RhaiError(#[from] Box<rhai::EvalAltResult>),
 
     #[error("Reqwest error: {0}")]
-    ReqwestError(#[source] reqwest::Error),
+    ReqwestError(#[from] reqwest::Error),
 
     #[error("Json decoding error: {0}")]
     JsonError(#[source] serde_json::Error),
@@ -34,7 +34,7 @@ pub enum Error {
     MethodFailed(String, u16, String),
 
     #[error("Argon2 password_hash error {0}")]
-    Argon2hash(#[source] argon2::password_hash::Error),
+    Argon2hash(#[from] argon2::password_hash::Error),
 
     #[error("Unsupported method")]
     UnsupportedMethod,

@@ -8,7 +8,7 @@ use tracing::*;
 handlebars_helper!(base64_decode: |arg:Value| String::from_utf8(STANDARD.decode(arg.as_str().unwrap_or_else(|| {
     warn!("handlebars::base64_decode received a non-string parameter: {:?}",arg);
     ""
-}).to_string()).unwrap_or_else(|e| {
+})).unwrap_or_else(|e| {
     warn!("handlebars::base64_decode failed to decode with: {e:?}");
     vec![]
 })).unwrap_or_else(|e| {
@@ -18,7 +18,7 @@ handlebars_helper!(base64_decode: |arg:Value| String::from_utf8(STANDARD.decode(
 handlebars_helper!(base64_encode: |arg:Value| STANDARD.encode(arg.as_str().unwrap_or_else(|| {
     warn!("handlebars::base64_encode received a non-string parameter: {:?}",arg);
     ""
-}).to_string()));
+})));
 handlebars_helper!(header_basic: |username:Value, password:Value| format!("Basic {}",STANDARD.encode(format!("{}:{}",username.as_str().unwrap_or_else(|| {
     warn!("handlebars::header_basic received a non-string username: {:?}",username);
     ""
@@ -57,7 +57,7 @@ impl HandleBars<'_> {
     pub fn register_template(&mut self, name: &str, template: &str) -> Result<()> {
         self.engine
             .register_template_string(name, template)
-            .map_err(|e| Error::HbsTemplateError(e))
+            .map_err(Error::HbsTemplateError)
     }
 
     pub fn rhai_register_template(&mut self, name: String, template: String) -> RhaiRes<()> {
@@ -68,7 +68,7 @@ impl HandleBars<'_> {
     pub fn render(&mut self, template: &str, data: &Value) -> Result<String> {
         self.engine
             .render_template(template, data)
-            .map_err(|e| Error::HbsRenderError(e))
+            .map_err(Error::HbsRenderError)
     }
 
     pub fn rhai_render(&mut self, template: String, data: rhai::Map) -> RhaiRes<String> {

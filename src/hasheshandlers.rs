@@ -9,6 +9,12 @@ pub struct Argon {
     salt: SaltString,
     argon: Argon2<'static>,
 }
+impl Default for Argon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Argon {
     #[must_use]
     pub fn new() -> Self {

@@ -109,12 +109,7 @@ impl RestClient {
         for (key, val) in self.headers.clone() {
             debug!("RestClient.header: {:} {:}", key, val);
         }
-        if self
-            .headers
-            .clone()
-            .into_iter()
-            .any(|(c, _)| c == *"Accept")
-        {
+        if self.headers.clone().into_iter().any(|(c, _)| c == *"Accept") {
             self
         } else {
             self.add_header("Accept", "application/json")
@@ -205,9 +200,7 @@ impl RestClient {
     }
 
     pub fn body_get(&mut self, path: &str) -> Result<String, Error> {
-        let response = self
-            .http_get(path)
-            .map_err(Error::ReqwestError)?;
+        let response = self.http_get(path).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -332,9 +325,7 @@ impl RestClient {
     }
 
     pub fn body_patch(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self
-            .http_patch(path, body)
-            .map_err(Error::ReqwestError)?;
+        let response = self.http_patch(path, body).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -421,9 +412,7 @@ impl RestClient {
     }
 
     pub fn body_put(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self
-            .http_put(path, body)
-            .map_err(Error::ReqwestError)?;
+        let response = self.http_put(path, body).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -510,9 +499,7 @@ impl RestClient {
     }
 
     pub fn body_post(&mut self, path: &str, body: &str) -> Result<String, Error> {
-        let response = self
-            .http_post(path, body)
-            .map_err(Error::ReqwestError)?;
+        let response = self.http_post(path, body).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -597,9 +584,7 @@ impl RestClient {
     }
 
     pub fn body_delete(&mut self, path: &str) -> Result<String, Error> {
-        let response = self
-            .http_delete(path)
-            .map_err(Error::ReqwestError)?;
+        let response = self.http_delete(path).map_err(Error::ReqwestError)?;
         if !response.status().is_success() {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
@@ -624,7 +609,8 @@ impl RestClient {
 
     pub fn json_delete(&mut self, path: &str) -> Result<Value, Error> {
         let text = self.body_delete(path)?;
-        let json = serde_json::from_str(&text).or_else(|_| Ok::<serde_json::Value, Error>(json!({"body": text})))?;
+        let json =
+            serde_json::from_str(&text).or_else(|_| Ok::<serde_json::Value, Error>(json!({"body": text})))?;
         Ok(json)
     }
 

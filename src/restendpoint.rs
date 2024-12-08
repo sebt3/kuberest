@@ -442,6 +442,13 @@ impl OwnedRestPoint {
     status = "RestEndPointStatus",
     shortname = "rep"
 )]
+#[kube(
+    doc = "Custom resource representing a RestEndPoint for kuberest",
+    printcolumn = r#"
+    {"name":"baseurl",   "type":"string", "description":"Base URL", "jsonPath":".spec.client.baseurl"},
+    {"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"},
+    {"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
+)]
 #[serde(rename_all = "camelCase")]
 pub struct RestEndPointSpec {
     /// List Handlebars templates to register
@@ -529,6 +536,41 @@ impl RestEndPoint {
         }
     }
 
+    async fn publish(recorder: &Recorder, reason: String, note_p: String, action: String) -> Result<()> {
+        let mut note = note_p;
+        note.truncate(1023);
+        recorder
+            .publish(Event {
+                type_: EventType::Normal,
+                reason,
+                note: Some(note),
+                action,
+                secondary: None,
+            })
+            .await
+            .map_err(Error::KubeError)
+    }
+
+    async fn publish_warning(
+        recorder: &Recorder,
+        reason: String,
+        note_p: String,
+        action: String,
+    ) -> Result<()> {
+        let mut note = note_p;
+        note.truncate(1023);
+        recorder
+            .publish(Event {
+                type_: EventType::Warning,
+                reason,
+                note: Some(note),
+                action,
+                secondary: None,
+            })
+            .await
+            .map_err(Error::KubeError)
+    }
+
     async fn get_tenant_namespaces(&self, client: Client) -> Result<Vec<String>> {
         let my_ns = self.metadata.namespace.clone().unwrap();
         let ns_api: Api<Namespace> = Api::all(client);
@@ -582,21 +624,6 @@ impl RestEndPoint {
             for item in templates {
                 hbs.register_template(&item.name, &item.template)
                     .unwrap_or_else(|e| {
-                        tokio::task::block_in_place(|| {
-                            Handle::current().block_on(async {
-                                recorder
-                                    .publish(Event {
-                                        type_: EventType::Warning,
-                                        reason: format!("Failed register template: template.{}", item.name),
-                                        note: Some(format!("{e:?}")),
-                                        action: "registering".into(),
-                                        secondary: None,
-                                    })
-                                    .await
-                                    .map_err(Error::KubeError)
-                                    .unwrap();
-                            })
-                        });
                         conditions.push(ApplicationCondition::template_failed(&format!(
                             "Registering template.{} raised {e:?}",
                             item.name
@@ -625,13 +652,7 @@ impl RestEndPoint {
                             if allowed.contains(&o_ns) {
                                 o_ns
                             } else {
-                                recorder.publish(Event {
-                                    type_: EventType::Warning,
-                                    reason: "IgnoredNamespace".into(),
-                                    note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
-                                    action: "readingInput".into(),
-                                    secondary: None,
-                                }).await.map_err(Error::KubeError)?;
+                                Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                 ns.clone()
                             }
                         } else {
@@ -650,35 +671,26 @@ impl RestEndPoint {
                             "data": my_secret.data
                         });
                     } else if secret.optional.unwrap_or(false) {
-                        recorder
-                            .publish(Event {
-                                type_: EventType::Normal,
-                                reason: "IgnoredInput".into(),
-                                note: Some(format!("Ignoring not found secret for Input '{}'", input.name)),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            })
-                            .await
-                            .map_err(Error::KubeError)?;
+                        Self::publish(
+                            &recorder,
+                            String::from("IgnoredInput"),
+                            format!("Ignoring not found secret for Input '{}'", input.name),
+                            String::from("readingInput"),
+                        )
+                        .await?;
                         conditions.push(ApplicationCondition::input_missing(&format!(
                             "Input '{}' Secret {}.{} not found",
                             input.name, my_ns, secret.name
                         )));
                         values["input"][input.name] = serde_json::json!({});
                     } else {
-                        recorder
-                            .publish(Event {
-                                type_: EventType::Normal,
-                                reason: "MissingSecret".into(),
-                                note: Some(format!(
-                                    "Secret '{}' not found for Input '{}'",
-                                    secret.name, input.name
-                                )),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            })
-                            .await
-                            .map_err(Error::KubeError)?;
+                        Self::publish(
+                            &recorder,
+                            String::from("MissingSecret"),
+                            format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                            String::from("readingInput"),
+                        )
+                        .await?;
                         conditions.push(ApplicationCondition::input_failed(&format!(
                             "Input '{}' Secret {}.{} not found",
                             input.name, my_ns, secret.name
@@ -690,13 +702,7 @@ impl RestEndPoint {
                             if allowed.contains(&o_ns) {
                                 o_ns
                             } else {
-                                recorder.publish(Event {
-                                    type_: EventType::Warning,
-                                    reason: "IgnoredNamespace".into(),
-                                    note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
-                                    action: "readingInput".into(),
-                                    secondary: None,
-                                }).await.map_err(Error::KubeError)?;
+                                Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                 ns.clone()
                             }
                         } else {
@@ -716,38 +722,26 @@ impl RestEndPoint {
                             "binaryData": my_cfg.binary_data
                         });
                     } else if cfgmap.optional.unwrap_or(false) {
-                        recorder
-                            .publish(Event {
-                                type_: EventType::Normal,
-                                reason: "IgnoredInput".into(),
-                                note: Some(format!(
-                                    "Ignoring not found ConfigMap for Input '{}'",
-                                    input.name
-                                )),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            })
-                            .await
-                            .map_err(Error::KubeError)?;
+                        Self::publish(
+                            &recorder,
+                            String::from("IgnoredInput"),
+                            format!("Ignoring not found ConfigMap for Input '{}'", input.name),
+                            String::from("readingInput"),
+                        )
+                        .await?;
                         conditions.push(ApplicationCondition::input_missing(&format!(
                             "Input '{}' ConfigMap {}.{} not found",
                             input.name, my_ns, cfgmap.name
                         )));
                         values["input"][input.name] = serde_json::json!({});
                     } else {
-                        recorder
-                            .publish(Event {
-                                type_: EventType::Normal,
-                                reason: "MissingConfigMap".into(),
-                                note: Some(format!(
-                                    "ConfigMap '{}' not found for Input '{}'",
-                                    cfgmap.name, input.name
-                                )),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            })
-                            .await
-                            .map_err(Error::KubeError)?;
+                        Self::publish(
+                            &recorder,
+                            String::from("MissingConfigMap"),
+                            format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                            String::from("readingInput"),
+                        )
+                        .await?;
                         conditions.push(ApplicationCondition::input_failed(&format!(
                             "Input '{}' ConfigMap {}.{} not found",
                             input.name, my_ns, cfgmap.name
@@ -764,16 +758,13 @@ impl RestEndPoint {
                         password_def.weight_symbols.unwrap_or(20)
                     ));
                 } else {
-                    recorder
-                        .publish(Event {
-                            type_: EventType::Warning,
-                            reason: "EmptyInput".into(),
-                            note: Some(format!("Input '{}' have no source", input.name)),
-                            action: "Fail".into(),
-                            secondary: None,
-                        })
-                        .await
-                        .map_err(Error::KubeError)?;
+                    Self::publish_warning(
+                        &recorder,
+                        String::from("EmptyInput"),
+                        format!("Input '{}' have no source", input.name),
+                        String::from("fail"),
+                    )
+                    .await?;
                     conditions.push(ApplicationCondition::input_failed(&format!(
                         "Input '{}' have no source",
                         input.name
@@ -802,6 +793,13 @@ impl RestEndPoint {
             .any(|c| c.condition_type != ConditionsType::InputMissing)
         {
             let msg = "Some input failed";
+            Self::publish_warning(
+                &recorder,
+                String::from(msg),
+                format!("Found {} error(s) while handling input", conditions.len()),
+                String::from("fail"),
+            )
+            .await?;
             conditions.push(ApplicationCondition::not_ready(msg));
             let new_status = Patch::Apply(json!({
                 "apiVersion": "kuberest.solidite.fr/v1",
@@ -865,6 +863,13 @@ impl RestEndPoint {
             .any(|c| c.condition_type != ConditionsType::InputMissing)
         {
             let msg = "Client setup failed";
+            Self::publish_warning(
+                &recorder,
+                String::from(msg),
+                format!("Found {} error(s) while setting up the client", conditions.len()),
+                String::from("fail"),
+            )
+            .await?;
             conditions.push(ApplicationCondition::not_ready(msg));
             let new_status = Patch::Apply(json!({
                 "apiVersion": "kuberest.solidite.fr/v1",
@@ -887,19 +892,6 @@ impl RestEndPoint {
             let cnd = conditions.clone();
             values["pre"] = rhai.eval(&script).unwrap_or_else(|e| {
                 conditions.push(ApplicationCondition::pre_script_failed(&format!("{e:?}")));
-                futures::executor::block_on(async {
-                    recorder
-                        .publish(Event {
-                            type_: EventType::Warning,
-                            reason: "pre-script failed".into(),
-                            note: Some(format!("pre-script failed with: {e:?}")),
-                            action: "pre-script".into(),
-                            secondary: None,
-                        })
-                        .await
-                        .map_err(Error::KubeError)
-                        .unwrap();
-                });
                 json!({})
             });
             // Validate that pre-script went Ok
@@ -908,6 +900,13 @@ impl RestEndPoint {
                 .any(|c| c.condition_type != ConditionsType::InputMissing)
             {
                 let msg = "Pre-script failed";
+                Self::publish_warning(
+                    &recorder,
+                    String::from(msg),
+                    format!("Found {} error(s) running the pre-script", conditions.len()),
+                    String::from("fail"),
+                )
+                .await?;
                 conditions.push(ApplicationCondition::not_ready(msg));
                 let new_status = Patch::Apply(json!({
                     "apiVersion": "kuberest.solidite.fr/v1",
@@ -943,25 +942,6 @@ impl RestEndPoint {
                                 &template!(read.key.as_str(), hbs, &values, conditions, recorder),
                             )
                             .unwrap_or_else(|e| {
-                                tokio::task::block_in_place(|| {
-                                    Handle::current().block_on(async {
-                                        recorder
-                                            .publish(Event {
-                                                type_: EventType::Warning,
-                                                reason: format!(
-                                                    "Failed reading: read.{}.{}",
-                                                    group.name.clone(),
-                                                    read.name
-                                                ),
-                                                note: Some(format!("{e:?}")),
-                                                action: "reading".into(),
-                                                secondary: None,
-                                            })
-                                            .await
-                                            .map_err(Error::KubeError)
-                                            .unwrap();
-                                    })
-                                });
                                 conditions.push(ApplicationCondition::read_failed(&format!(
                                     "Reading read.{}.{} raised {e:?}",
                                     group.name.clone(),
@@ -979,6 +959,13 @@ impl RestEndPoint {
             .any(|c| c.condition_type != ConditionsType::InputMissing)
         {
             let msg = "Some read have failed";
+            Self::publish_warning(
+                &recorder,
+                String::from(msg),
+                format!("Found {} error(s) while reading values", conditions.len()),
+                String::from("fail"),
+            )
+            .await?;
             conditions.push(ApplicationCondition::not_ready(msg));
             let new_status = Patch::Apply(json!({
                 "apiVersion": "kuberest.solidite.fr/v1",
@@ -1012,25 +999,6 @@ impl RestEndPoint {
                         template!(item.values.as_str(), hbs, &values, conditions, recorder).as_str(),
                     )
                     .unwrap_or_else(|e| {
-                        tokio::task::block_in_place(|| {
-                            Handle::current().block_on(async {
-                                recorder
-                                    .publish(Event {
-                                        type_: EventType::Warning,
-                                        reason: format!(
-                                            "Failed parsing: write.{}.{}.values",
-                                            group.name.clone(),
-                                            item.name
-                                        ),
-                                        note: Some(format!("{e:?}")),
-                                        action: "writing".into(),
-                                        secondary: None,
-                                    })
-                                    .await
-                                    .map_err(Error::KubeError)
-                                    .unwrap();
-                            })
-                        });
                         conditions.push(ApplicationCondition::write_failed(&format!(
                             "Templating write.{}.{}.values raised {e:?}",
                             group.name.clone(),
@@ -1054,25 +1022,6 @@ impl RestEndPoint {
                                 .find(|t| t.group == group.name && t.name == item.name)
                                 .unwrap();
                             if myself.key.is_empty() {
-                                tokio::task::block_in_place(|| {
-                                    Handle::current().block_on(async {
-                                        recorder
-                                            .publish(Event {
-                                                type_: EventType::Warning,
-                                                reason: format!(
-                                                    "Failed updating: write.{}.{}",
-                                                    group.name.clone(),
-                                                    item.name
-                                                ),
-                                                note: Some("known key is empty".to_string()),
-                                                action: "updating".into(),
-                                                secondary: None,
-                                            })
-                                            .await
-                                            .map_err(Error::KubeError)
-                                            .unwrap();
-                                    })
-                                });
                                 conditions.push(ApplicationCondition::write_failed(&format!(
                                     "Will *not* update write.{}.{} with an empty key",
                                     group.name.clone(),
@@ -1101,25 +1050,6 @@ impl RestEndPoint {
                                         } else {
                                             false
                                         };
-                                        tokio::task::block_in_place(|| {
-                                            Handle::current().block_on(async {
-                                                recorder
-                                                    .publish(Event {
-                                                        type_: EventType::Warning,
-                                                        reason: format!(
-                                                            "Failed updating: write.{}.{}",
-                                                            group.name.clone(),
-                                                            item.name
-                                                        ),
-                                                        note: Some(format!("{e:?}")),
-                                                        action: "updating".into(),
-                                                        secondary: None,
-                                                    })
-                                                    .await
-                                                    .map_err(Error::KubeError)
-                                                    .unwrap();
-                                            })
-                                        });
                                         conditions.push(ApplicationCondition::write_failed(&format!(
                                             "Updating write.{}.{} raised {e:?}",
                                             group.name.clone(),
@@ -1137,15 +1067,6 @@ impl RestEndPoint {
                                     obj[key_name.clone()].as_number().unwrap().to_string()
                                 } else {
                                     obj[key_name.clone()].as_str().unwrap_or_else(|| {
-                                        tokio::task::block_in_place(|| {Handle::current().block_on(async {
-                                            recorder.publish(Event {
-                                                type_: EventType::Warning,
-                                                reason: format!("Failed updating: write.{}.{}",group.name.clone(),item.name),
-                                                note: Some(format!("{} is neither a number or a string in {:}",&key_name_moved,obj)),
-                                                action: "updating".into(),
-                                                secondary: None,
-                                            }).await.map_err(Error::KubeError).unwrap();
-                                        })});
                                         conditions.push(ApplicationCondition::write_failed(&format!("While updating write.{}.{} {} is neither a number or a string in {:}",group.name.clone(),item.name,key_name_moved,obj)));
                                         ""
                                     }).to_string()
@@ -1173,25 +1094,6 @@ impl RestEndPoint {
                                     &vals,
                                 )
                                 .unwrap_or_else(|e| {
-                                    tokio::task::block_in_place(|| {
-                                        Handle::current().block_on(async {
-                                            recorder
-                                                .publish(Event {
-                                                    type_: EventType::Warning,
-                                                    reason: format!(
-                                                        "Failed creating: write.{}.{}",
-                                                        group.name.clone(),
-                                                        item.name
-                                                    ),
-                                                    note: Some(format!("{e:?}")),
-                                                    action: "creating".into(),
-                                                    secondary: None,
-                                                })
-                                                .await
-                                                .map_err(Error::KubeError)
-                                                .unwrap();
-                                        })
-                                    });
                                     conditions.push(ApplicationCondition::write_failed(&format!(
                                         "Creating write.{}.{} raised {e:?}",
                                         group.name.clone(),
@@ -1209,15 +1111,6 @@ impl RestEndPoint {
                                 obj[key_name.clone()].as_number().unwrap().to_string()
                             } else {
                                 obj[key_name.clone()].as_str().unwrap_or_else(|| {
-                                    tokio::task::block_in_place(|| {Handle::current().block_on(async {
-                                        recorder.publish(Event {
-                                            type_: EventType::Warning,
-                                            reason: format!("Failed creating: write.{}.{}",group.name.clone(),item.name),
-                                            note: Some(format!("{} is neither a number or a string in {:}",key_name_moved,obj)),
-                                            action: "creating".into(),
-                                            secondary: None,
-                                        }).await.map_err(Error::KubeError).unwrap();
-                                    })});
                                     conditions.push(ApplicationCondition::write_failed(&format!("While creating write.{}.{} {} is neither a number or a string in {:}",group.name.clone(),item.name,key_name_moved,obj)));
                                     ""
                                 }).to_string()
@@ -1276,17 +1169,13 @@ impl RestEndPoint {
                         target_new.push(old.clone());
                         tokio::task::block_in_place(|| {
                             Handle::current().block_on(async {
-                                recorder
-                                    .publish(Event {
-                                        type_: EventType::Warning,
-                                        reason: format!("Failed deleting: write.{}.{}", old.group, old.name),
-                                        note: Some(format!("{e:?}")),
-                                        action: "deleting".into(),
-                                        secondary: None,
-                                    })
-                                    .await
-                                    .map_err(Error::KubeError)
-                                    .unwrap();
+                                Self::publish_warning(
+                                    &recorder,
+                                    format!("Failed deleting: write.{}.{}", old.group, old.name),
+                                    format!("{e:?}"),
+                                    String::from("deleting"),
+                                )
+                                .await.unwrap_or(());
                             })
                         });
                         json!({})
@@ -1300,6 +1189,13 @@ impl RestEndPoint {
                 && c.condition_type != ConditionsType::WriteAlreadyExist
         }) {
             let msg = "Some writes have failed";
+            Self::publish_warning(
+                &recorder,
+                String::from(msg),
+                format!("Found {} error(s) while writing values", conditions.len()),
+                String::from("fail"),
+            )
+            .await?;
             conditions.push(ApplicationCondition::not_ready(msg));
             let new_status = Patch::Apply(json!({
                 "apiVersion": "kuberest.solidite.fr/v1",
@@ -1323,19 +1219,6 @@ impl RestEndPoint {
             let cnd = conditions.clone();
             values["post"] = rhai.eval(&script).unwrap_or_else(|e| {
                 conditions.push(ApplicationCondition::post_script_failed(&format!("{e:?}")));
-                futures::executor::block_on(async {
-                    recorder
-                        .publish(Event {
-                            type_: EventType::Warning,
-                            reason: "post-script failed".into(),
-                            note: Some(format!("post-script failed with: {e:?}")),
-                            action: "post-script".into(),
-                            secondary: None,
-                        })
-                        .await
-                        .map_err(Error::KubeError)
-                        .unwrap();
-                });
                 json!({})
             });
             // Validate that post-script went Ok
@@ -1344,6 +1227,13 @@ impl RestEndPoint {
                 .any(|c| c.condition_type != ConditionsType::InputMissing)
             {
                 let msg = "Post-script failed";
+                Self::publish_warning(
+                    &recorder,
+                    String::from(msg),
+                    format!("Found {} error(s) during post-script", conditions.len()),
+                    String::from("fail"),
+                )
+                .await?;
                 conditions.push(ApplicationCondition::not_ready(msg));
                 let new_status = Patch::Apply(json!({
                     "apiVersion": "kuberest.solidite.fr/v1",
@@ -1370,13 +1260,7 @@ impl RestEndPoint {
                         if allowed.contains(&o_ns) {
                             o_ns
                         } else {
-                            recorder.publish(Event {
-                                type_: EventType::Warning,
-                                reason: "IgnoredNamespace".into(),
-                                note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",output.metadata.name)),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            }).await.map_err(Error::KubeError)?;
+                            Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",output.metadata.name), String::from("readingOutput")).await?;
                             ns.clone()
                         }
                     } else {
@@ -1417,19 +1301,6 @@ impl RestEndPoint {
                             let _ =
                                 update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
                             if output.teardown.unwrap_or(true) {
-                                recorder
-                                    .publish(Event {
-                                        type_: EventType::Warning,
-                                        reason: "OutputAlreadyExist".into(),
-                                        note: Some(format!(
-                                            "Secret output '{}.{}' already exist, won't take ownership.",
-                                            my_ns, output.metadata.name
-                                        )),
-                                        action: "outputSecret".into(),
-                                        secondary: None,
-                                    })
-                                    .await
-                                    .map_err(Error::KubeError)?;
                                 conditions.push(ApplicationCondition::output_exist(&format!(
                                     "Secret output '{}.{}' already exist, won't take ownership.",
                                     my_ns, output.metadata.name
@@ -1456,22 +1327,8 @@ impl RestEndPoint {
                             }
                         }
                     } else if secrets.have(&output.metadata.name).await {
-                        let _ =
-                            update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
+                        let _ = update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
                         if output.teardown.unwrap_or(true) {
-                            recorder
-                                .publish(Event {
-                                    type_: EventType::Warning,
-                                    reason: "OutputAlreadyExist".into(),
-                                    note: Some(format!(
-                                        "Secret output '{}.{}' already exist, won't take ownership.",
-                                        my_ns, output.metadata.name
-                                    )),
-                                    action: "outputSecret".into(),
-                                    secondary: None,
-                                })
-                                .await
-                                .map_err(Error::KubeError)?;
                             conditions.push(ApplicationCondition::output_exist(&format!(
                                 "Secret output '{}.{}' already exist, won't take ownership.",
                                 my_ns, output.metadata.name
@@ -1527,19 +1384,6 @@ impl RestEndPoint {
                             let _ =
                                 update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
                             if output.teardown.unwrap_or(true) {
-                                recorder
-                                    .publish(Event {
-                                        type_: EventType::Warning,
-                                        reason: "OutputAlreadyExist".into(),
-                                        note: Some(format!(
-                                            "ConfigMap output '{}.{}' already exist, won't take ownership.",
-                                            my_ns, output.metadata.name
-                                        )),
-                                        action: "outputConfigMap".into(),
-                                        secondary: None,
-                                    })
-                                    .await
-                                    .map_err(Error::KubeError)?;
                                 conditions.push(ApplicationCondition::output_exist(&format!(
                                     "ConfigMap output '{}.{}' already exist, won't take ownership.",
                                     my_ns, output.metadata.name
@@ -1573,22 +1417,8 @@ impl RestEndPoint {
                             }
                         }
                     } else if cms.have(&output.metadata.name).await {
-                        let _ =
-                            update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
+                        let _ = update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
                         if output.teardown.unwrap_or(true) {
-                            recorder
-                                .publish(Event {
-                                    type_: EventType::Warning,
-                                    reason: "OutputAlreadyExist".into(),
-                                    note: Some(format!(
-                                        "ConfigMap output '{}.{}' already exist, won't take ownership.",
-                                        my_ns, output.metadata.name
-                                    )),
-                                    action: "outputConfigMap".into(),
-                                    secondary: None,
-                                })
-                                .await
-                                .map_err(Error::KubeError)?;
                             conditions.push(ApplicationCondition::output_exist(&format!(
                                 "ConfigMap output '{}.{}' already exist, won't take ownership.",
                                 my_ns, output.metadata.name
@@ -1635,27 +1465,9 @@ impl RestEndPoint {
                     let mut secrets = SecretHandler::new(&ctx.client.clone(), &obj.namespace);
                     if secrets.have_uid(&obj.name, &obj.uid).await {
                         secrets.delete(obj.name.as_str()).await.unwrap_or_else(|e| {
-                            tokio::task::block_in_place(|| {
-                                Handle::current().block_on(async {
-                                    recorder
-                                        .publish(Event {
-                                            type_: EventType::Warning,
-                                            reason: format!(
-                                                "Failed deleting: {}.{}",
-                                                obj.namespace, obj.name
-                                            ),
-                                            note: Some(format!("{e:?}")),
-                                            action: "deleting".into(),
-                                            secondary: None,
-                                        })
-                                        .await
-                                        .map_err(Error::KubeError)
-                                        .unwrap();
-                                })
-                            });
                             conditions.push(ApplicationCondition::output_delete_failed(&format!(
-                                "Failed deleting: {}.{}",
-                                obj.namespace, obj.name
+                                "Failed deleting: {}.{}: {:?}",
+                                obj.namespace, obj.name, e
                             )));
                             owned_new.push(obj.clone());
                         })
@@ -1664,27 +1476,9 @@ impl RestEndPoint {
                     let mut cms = ConfigMapHandler::new(&ctx.client.clone(), &obj.namespace);
                     if cms.have_uid(&obj.name, &obj.uid).await {
                         cms.delete(obj.name.as_str()).await.unwrap_or_else(|e| {
-                            tokio::task::block_in_place(|| {
-                                Handle::current().block_on(async {
-                                    recorder
-                                        .publish(Event {
-                                            type_: EventType::Warning,
-                                            reason: format!(
-                                                "Failed deleting: {}.{}",
-                                                obj.namespace, obj.name
-                                            ),
-                                            note: Some(format!("{e:?}")),
-                                            action: "deleting".into(),
-                                            secondary: None,
-                                        })
-                                        .await
-                                        .map_err(Error::KubeError)
-                                        .unwrap();
-                                })
-                            });
                             conditions.push(ApplicationCondition::output_delete_failed(&format!(
-                                "Failed deleting: {}.{}",
-                                obj.namespace, obj.name
+                                "Failed deleting: {}.{}: {:?}",
+                                obj.namespace, obj.name, e
                             )));
                             owned_new.push(obj.clone());
                         })
@@ -1700,6 +1494,13 @@ impl RestEndPoint {
                 && c.condition_type != ConditionsType::OutputAlreadyExist
         }) {
             let msg = "Some output have failed";
+            Self::publish_warning(
+                &recorder,
+                String::from(msg),
+                format!("Found {} error(s) while creating outputs", conditions.len()),
+                String::from("fail"),
+            )
+            .await?;
             conditions.push(ApplicationCondition::not_ready(msg));
             let new_status = Patch::Apply(json!({
                 "apiVersion": "kuberest.solidite.fr/v1",
@@ -1746,21 +1547,6 @@ impl RestEndPoint {
             for item in templates {
                 hbs.register_template(&item.name, &item.template)
                     .unwrap_or_else(|e| {
-                        tokio::task::block_in_place(|| {
-                            Handle::current().block_on(async {
-                                recorder
-                                    .publish(Event {
-                                        type_: EventType::Warning,
-                                        reason: format!("Failed register template: template.{}", item.name),
-                                        note: Some(format!("{e:?}")),
-                                        action: "registering".into(),
-                                        secondary: None,
-                                    })
-                                    .await
-                                    .map_err(Error::KubeError)
-                                    .unwrap();
-                            })
-                        });
                         conditions.push(ApplicationCondition::template_failed(&format!(
                             "Registering template.{} raised {e:?}",
                             item.name
@@ -1788,13 +1574,7 @@ impl RestEndPoint {
                             if allowed.contains(&o_ns) {
                                 o_ns
                             } else {
-                                recorder.publish(Event {
-                                    type_: EventType::Warning,
-                                    reason: "IgnoredNamespace".into(),
-                                    note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
-                                    action: "readingInput".into(),
-                                    secondary: None,
-                                }).await.map_err(Error::KubeError)?;
+                                Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                 ns.clone()
                             }
                         } else {
@@ -1813,35 +1593,26 @@ impl RestEndPoint {
                             "data": my_secret.data
                         });
                     } else if secret.optional.unwrap_or(false) {
-                        recorder
-                            .publish(Event {
-                                type_: EventType::Normal,
-                                reason: "IgnoredInput".into(),
-                                note: Some(format!("Ignoring not found secret for Input '{}'", input.name)),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            })
-                            .await
-                            .map_err(Error::KubeError)?;
+                        Self::publish(
+                            &recorder,
+                            String::from("IgnoredInput"),
+                            format!("Ignoring not found secret for Input '{}'", input.name),
+                            String::from("readingInput"),
+                        )
+                        .await?;
                         conditions.push(ApplicationCondition::input_missing(&format!(
                             "Input '{}' Secret {}.{} not found",
                             input.name, my_ns, secret.name
                         )));
                         values["input"][input.name] = serde_json::json!({});
                     } else {
-                        recorder
-                            .publish(Event {
-                                type_: EventType::Normal,
-                                reason: "MissingSecret".into(),
-                                note: Some(format!(
-                                    "Secret '{}' not found for Input '{}'",
-                                    secret.name, input.name
-                                )),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            })
-                            .await
-                            .map_err(Error::KubeError)?;
+                        Self::publish(
+                            &recorder,
+                            String::from("MissingSecret"),
+                            format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                            String::from("readingInput"),
+                        )
+                        .await?;
                         conditions.push(ApplicationCondition::input_failed(&format!(
                             "Input '{}' Secret {}.{} not found",
                             input.name, my_ns, secret.name
@@ -1853,13 +1624,7 @@ impl RestEndPoint {
                             if allowed.contains(&o_ns) {
                                 o_ns
                             } else {
-                                recorder.publish(Event {
-                                    type_: EventType::Warning,
-                                    reason: "IgnoredNamespace".into(),
-                                    note: Some(format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name)),
-                                    action: "readingInput".into(),
-                                    secondary: None,
-                                }).await.map_err(Error::KubeError)?;
+                                Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                 ns.clone()
                             }
                         } else {
@@ -1879,38 +1644,26 @@ impl RestEndPoint {
                             "binaryData": my_cfg.binary_data
                         });
                     } else if cfgmap.optional.unwrap_or(false) {
-                        recorder
-                            .publish(Event {
-                                type_: EventType::Normal,
-                                reason: "IgnoredInput".into(),
-                                note: Some(format!(
-                                    "Ignoring not found ConfigMap for Input '{}'",
-                                    input.name
-                                )),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            })
-                            .await
-                            .map_err(Error::KubeError)?;
+                        Self::publish(
+                            &recorder,
+                            String::from("IgnoredInput"),
+                            format!("Ignoring not found ConfigMap for Input '{}'", input.name),
+                            String::from("readingInput"),
+                        )
+                        .await?;
                         conditions.push(ApplicationCondition::input_missing(&format!(
                             "Input '{}' ConfigMap {}.{} not found",
                             input.name, my_ns, cfgmap.name
                         )));
                         values["input"][input.name] = serde_json::json!({});
                     } else {
-                        recorder
-                            .publish(Event {
-                                type_: EventType::Normal,
-                                reason: "MissingConfigMap".into(),
-                                note: Some(format!(
-                                    "ConfigMap '{}' not found for Input '{}'",
-                                    cfgmap.name, input.name
-                                )),
-                                action: "readingInput".into(),
-                                secondary: None,
-                            })
-                            .await
-                            .map_err(Error::KubeError)?;
+                        Self::publish(
+                            &recorder,
+                            String::from("MissingConfigMap"),
+                            format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                            String::from("readingInput"),
+                        )
+                        .await?;
                         conditions.push(ApplicationCondition::input_failed(&format!(
                             "Input '{}' ConfigMap {}.{} not found",
                             input.name, my_ns, cfgmap.name
@@ -1927,16 +1680,13 @@ impl RestEndPoint {
                         password_def.weight_symbols.unwrap_or(20)
                     ));
                 } else {
-                    recorder
-                        .publish(Event {
-                            type_: EventType::Warning,
-                            reason: "EmptyInput".into(),
-                            note: Some(format!("Input '{}' have no source", input.name)),
-                            action: "Fail".into(),
-                            secondary: None,
-                        })
-                        .await
-                        .map_err(Error::KubeError)?;
+                    Self::publish_warning(
+                        &recorder,
+                        String::from("EmptyInput"),
+                        format!("Input '{}' have no source", input.name),
+                        String::from("fail"),
+                    )
+                    .await?;
                     conditions.push(ApplicationCondition::input_failed(&format!(
                         "Input '{}' have no source",
                         input.name
@@ -2009,19 +1759,6 @@ impl RestEndPoint {
             let cnd = conditions.clone();
             values["pre"] = rhai.eval(&script).unwrap_or_else(|e| {
                 conditions.push(ApplicationCondition::post_script_failed(&format!("{e:?}")));
-                futures::executor::block_on(async {
-                    recorder
-                        .publish(Event {
-                            type_: EventType::Warning,
-                            reason: "teardown-script failed".into(),
-                            note: Some(format!("teardown-script failed with: {e:?}")),
-                            action: "teardown-script".into(),
-                            secondary: None,
-                        })
-                        .await
-                        .map_err(Error::KubeError)
-                        .unwrap();
-                });
                 json!({})
             });
             values["teardown"] = values["pre"].clone();
@@ -2031,6 +1768,13 @@ impl RestEndPoint {
                 .any(|c| c.condition_type != ConditionsType::InputMissing)
             {
                 let msg = "Teardown failed";
+                Self::publish_warning(
+                    &recorder,
+                    String::from(msg),
+                    format!("Found {} error(s) during teardown", conditions.len()),
+                    String::from("fail"),
+                )
+                .await?;
                 conditions.push(ApplicationCondition::not_ready(msg));
                 let new_status = Patch::Apply(json!({
                     "apiVersion": "kuberest.solidite.fr/v1",
@@ -2073,20 +1817,14 @@ impl RestEndPoint {
                             }
                             tokio::task::block_in_place(|| {
                                 Handle::current().block_on(async {
-                                    recorder
-                                        .publish(Event {
-                                            type_: EventType::Warning,
-                                            reason: format!(
-                                                "Failed deleting: write.{}.{}",
-                                                obj.group, obj.name
-                                            ),
-                                            note: Some(format!("{e:?}")),
-                                            action: "deleting".into(),
-                                            secondary: None,
-                                        })
-                                        .await
-                                        .map_err(Error::KubeError)
-                                        .unwrap();
+                                    Self::publish_warning(
+                                        &recorder,
+                                        format!("Failed deleting: write.{}.{}", obj.group, obj.name),
+                                        format!("{e:?}"),
+                                        String::from("deleting"),
+                                    )
+                                    .await
+                                    .unwrap_or(());
                                 })
                             });
                             json!({})
@@ -2102,27 +1840,9 @@ impl RestEndPoint {
                     let mut secrets = SecretHandler::new(&ctx.client.clone(), &obj.namespace);
                     if secrets.have_uid(&obj.name, &obj.uid).await {
                         secrets.delete(obj.name.as_str()).await.unwrap_or_else(|e| {
-                            tokio::task::block_in_place(|| {
-                                Handle::current().block_on(async {
-                                    recorder
-                                        .publish(Event {
-                                            type_: EventType::Warning,
-                                            reason: format!(
-                                                "Failed deleting: {}.{}",
-                                                obj.namespace, obj.name
-                                            ),
-                                            note: Some(format!("{e:?}")),
-                                            action: "deleting".into(),
-                                            secondary: None,
-                                        })
-                                        .await
-                                        .map_err(Error::KubeError)
-                                        .unwrap();
-                                })
-                            });
                             conditions.push(ApplicationCondition::output_delete_failed(&format!(
-                                "Failed deleting: {}.{}",
-                                obj.namespace, obj.name
+                                "Failed deleting: {}.{}: {:?}",
+                                obj.namespace, obj.name, e
                             )));
                             owned_new.push(obj.clone());
                         })
@@ -2131,27 +1851,9 @@ impl RestEndPoint {
                     let mut secrets = ConfigMapHandler::new(&ctx.client.clone(), &obj.namespace);
                     if secrets.have_uid(&obj.name, &obj.uid).await {
                         secrets.delete(obj.name.as_str()).await.unwrap_or_else(|e| {
-                            tokio::task::block_in_place(|| {
-                                Handle::current().block_on(async {
-                                    recorder
-                                        .publish(Event {
-                                            type_: EventType::Warning,
-                                            reason: format!(
-                                                "Failed deleting: {}.{}",
-                                                obj.namespace, obj.name
-                                            ),
-                                            note: Some(format!("{e:?}")),
-                                            action: "deleting".into(),
-                                            secondary: None,
-                                        })
-                                        .await
-                                        .map_err(Error::KubeError)
-                                        .unwrap();
-                                })
-                            });
                             conditions.push(ApplicationCondition::output_delete_failed(&format!(
-                                "Failed deleting: {}.{}",
-                                obj.namespace, obj.name
+                                "Failed deleting: {}.{}: {:?}",
+                                obj.namespace, obj.name, e
                             )));
                             owned_new.push(obj.clone());
                         })
@@ -2166,13 +1868,20 @@ impl RestEndPoint {
         }) || !owned_new.is_empty()
             || !target_new.is_empty()
         {
+            let msg = "Some teardown failed";
+            Self::publish_warning(
+                &recorder,
+                String::from(msg),
+                format!("Found {} error(s) during teardown", conditions.len()),
+                String::from("fail"),
+            )
+            .await?;
             // Wait 30s before reporting the failure, because the controller keeps trying and it might hammer the api-server and the api-endpoint targeted otherwise. Beside the events generated already informed the user of the issue
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
                 })
             });
-            let msg = "Some teardown failed";
             conditions.push(ApplicationCondition::not_ready(msg));
             let new_status = Patch::Apply(json!({
                 "apiVersion": "kuberest.solidite.fr/v1",

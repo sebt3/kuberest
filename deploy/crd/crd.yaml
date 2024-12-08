@@ -13,11 +13,24 @@ spec:
     singular: restendpoint
   scope: Namespaced
   versions:
-  - additionalPrinterColumns: []
+  - additionalPrinterColumns:
+    - description: Base URL
+      jsonPath: .spec.client.baseurl
+      name: baseurl
+      type: string
+    - description: Last update date
+      format: date-time
+      jsonPath: .status.conditions[?(@.type == 'Ready')].lastTransitionTime
+      name: last_updated
+      type: date
+    - description: Errors
+      jsonPath: .status.conditions[?(@.status == 'False')].message
+      name: errors
+      type: string
     name: v1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for RestEndPointSpec via `CustomResource`
+        description: Custom resource representing a RestEndPoint for kuberest
         properties:
           spec:
             description: Describe the specification of a RestEndPoint

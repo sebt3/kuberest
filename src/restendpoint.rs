@@ -1175,7 +1175,8 @@ impl RestEndPoint {
                                     format!("{e:?}"),
                                     String::from("deleting"),
                                 )
-                                .await.unwrap_or(());
+                                .await
+                                .unwrap_or(());
                             })
                         });
                         json!({})

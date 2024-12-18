@@ -806,14 +806,20 @@ impl RestEndPoint {
                 "kind": "RestEndPoint",
                 "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
             }));
+            let first_run = self.status.is_none();
             let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
             let _o = restendpoints
                 .patch_status(&name, &ps, &new_status)
                 .await
                 .map_err(Error::KubeError)?;
-            return Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.unwrap_or(15 * 60),
-            )));
+            // Some missing Secret or ConfigMap might be ok on first run, dont wait too much
+            if first_run {
+                return Ok(Action::requeue(Duration::from_secs(60)));
+            } else {
+                return Ok(Action::requeue(Duration::from_secs(
+                    self.spec.check_frequency.unwrap_or(15 * 60),
+                )));
+            }
         }
         rhai.set_dynamic("input", &values["input"]);
         rhai.set_dynamic("values", &values);
@@ -967,6 +973,7 @@ impl RestEndPoint {
             )
             .await?;
             conditions.push(ApplicationCondition::not_ready(msg));
+            let first_run = self.status.is_none();
             let new_status = Patch::Apply(json!({
                 "apiVersion": "kuberest.solidite.fr/v1",
                 "kind": "RestEndPoint",
@@ -977,9 +984,14 @@ impl RestEndPoint {
                 .patch_status(&name, &ps, &new_status)
                 .await
                 .map_err(Error::KubeError)?;
-            return Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.unwrap_or(15 * 60),
-            )));
+            // We might be trying to configure an app no yet from the same installation, dont wait too much on first try
+            if first_run {
+                return Ok(Action::requeue(Duration::from_secs(60)));
+            } else {
+                return Ok(Action::requeue(Duration::from_secs(
+                    self.spec.check_frequency.unwrap_or(15 * 60),
+                )));
+            }
         }
         rhai.set_dynamic("read", &values["read"]);
         rhai.set_dynamic("values", &values);
@@ -1564,154 +1576,166 @@ impl RestEndPoint {
         } else {
             Vec::new()
         };
+        let mut do_prepare_client = true;
+        if self.status.is_none() {
+            // Nothing to do, since there's nothing to delete
+            return Ok(Action::await_change());
+        } else if self.spec.teardown.is_none() {
+            // no teardown script, only prepare client if there are some write to delete
+            let status = self.status.clone().unwrap();
+            do_prepare_client = status.owned_target.is_empty();
+        }
         let mut rhai = Script::new();
         rhai.ctx.set_or_push("hbs", hbs.clone());
         // Read the inputs first
-        if let Some(inputs) = self.spec.clone().inputs {
-            for input in inputs {
-                if let Some(secret) = input.secret_ref {
-                    let my_ns = if use_multi {
-                        if let Some(o_ns) = secret.namespace.clone() {
-                            if allowed.contains(&o_ns) {
-                                o_ns
+        if do_prepare_client {
+            if let Some(inputs) = self.spec.clone().inputs {
+                for input in inputs {
+                    if let Some(secret) = input.secret_ref {
+                        let my_ns = if use_multi {
+                            if let Some(o_ns) = secret.namespace.clone() {
+                                if allowed.contains(&o_ns) {
+                                    o_ns
+                                } else {
+                                    Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
+                                    ns.clone()
+                                }
                             } else {
-                                Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                 ns.clone()
                             }
+                        } else if let Some(local_ns) = secret.namespace {
+                            local_ns
                         } else {
                             ns.clone()
+                        };
+                        let mut secrets = SecretHandler::new(&ctx.client.clone(), &my_ns);
+                        if secrets.have(&secret.name).await {
+                            let my_secret = secrets.get(&secret.name).await.unwrap();
+                            values["input"][input.name] = serde_json::json!({
+                                "metadata": my_secret.metadata,
+                                "data": my_secret.data
+                            });
+                        } else if secret.optional.unwrap_or(false) {
+                            Self::publish(
+                                &recorder,
+                                String::from("IgnoredInput"),
+                                format!("Ignoring not found secret for Input '{}'", input.name),
+                                String::from("readingInput"),
+                            )
+                            .await?;
+                            conditions.push(ApplicationCondition::input_missing(&format!(
+                                "Input '{}' Secret {}.{} not found",
+                                input.name, my_ns, secret.name
+                            )));
+                            values["input"][input.name] = serde_json::json!({});
+                        } else {
+                            Self::publish(
+                                &recorder,
+                                String::from("MissingSecret"),
+                                format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                                String::from("readingInput"),
+                            )
+                            .await?;
+                            conditions.push(ApplicationCondition::input_failed(&format!(
+                                "Input '{}' Secret {}.{} not found",
+                                input.name, my_ns, secret.name
+                            )));
                         }
-                    } else if let Some(local_ns) = secret.namespace {
-                        local_ns
+                    } else if let Some(cfgmap) = input.config_map_ref {
+                        let my_ns = if use_multi {
+                            if let Some(o_ns) = cfgmap.namespace.clone() {
+                                if allowed.contains(&o_ns) {
+                                    o_ns
+                                } else {
+                                    Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
+                                    ns.clone()
+                                }
+                            } else {
+                                ns.clone()
+                            }
+                        } else if let Some(local_ns) = cfgmap.namespace {
+                            local_ns
+                        } else {
+                            ns.clone()
+                        };
+                        let mut maps = ConfigMapHandler::new(&ctx.client.clone(), &my_ns);
+                        if maps.have(&cfgmap.name).await {
+                            let my_cfg = maps.get(&cfgmap.name).await.unwrap();
+                            values["input"][input.name] = serde_json::json!({
+                                "metadata": my_cfg.metadata,
+                                "data": my_cfg.data,
+                                "binaryData": my_cfg.binary_data
+                            });
+                        } else if cfgmap.optional.unwrap_or(false) {
+                            Self::publish(
+                                &recorder,
+                                String::from("IgnoredInput"),
+                                format!("Ignoring not found ConfigMap for Input '{}'", input.name),
+                                String::from("readingInput"),
+                            )
+                            .await?;
+                            conditions.push(ApplicationCondition::input_missing(&format!(
+                                "Input '{}' ConfigMap {}.{} not found",
+                                input.name, my_ns, cfgmap.name
+                            )));
+                            values["input"][input.name] = serde_json::json!({});
+                        } else {
+                            Self::publish(
+                                &recorder,
+                                String::from("MissingConfigMap"),
+                                format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                String::from("readingInput"),
+                            )
+                            .await?;
+                            conditions.push(ApplicationCondition::input_failed(&format!(
+                                "Input '{}' ConfigMap {}.{} not found",
+                                input.name, my_ns, cfgmap.name
+                            )));
+                        }
+                    } else if let Some(render) = input.handle_bars_render {
+                        values["input"][input.name] =
+                            json!(template!(render.as_str(), hbs, &values, conditions, recorder));
+                    } else if let Some(password_def) = input.password_generator {
+                        values["input"][input.name] = json!(Passwords::new().generate(
+                            password_def.length.unwrap_or(32),
+                            password_def.weight_alphas.unwrap_or(60),
+                            password_def.weight_numbers.unwrap_or(20),
+                            password_def.weight_symbols.unwrap_or(20)
+                        ));
                     } else {
-                        ns.clone()
-                    };
-                    let mut secrets = SecretHandler::new(&ctx.client.clone(), &my_ns);
-                    if secrets.have(&secret.name).await {
-                        let my_secret = secrets.get(&secret.name).await.unwrap();
-                        values["input"][input.name] = serde_json::json!({
-                            "metadata": my_secret.metadata,
-                            "data": my_secret.data
-                        });
-                    } else if secret.optional.unwrap_or(false) {
-                        Self::publish(
+                        Self::publish_warning(
                             &recorder,
-                            String::from("IgnoredInput"),
-                            format!("Ignoring not found secret for Input '{}'", input.name),
-                            String::from("readingInput"),
-                        )
-                        .await?;
-                        conditions.push(ApplicationCondition::input_missing(&format!(
-                            "Input '{}' Secret {}.{} not found",
-                            input.name, my_ns, secret.name
-                        )));
-                        values["input"][input.name] = serde_json::json!({});
-                    } else {
-                        Self::publish(
-                            &recorder,
-                            String::from("MissingSecret"),
-                            format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
-                            String::from("readingInput"),
+                            String::from("EmptyInput"),
+                            format!("Input '{}' have no source", input.name),
+                            String::from("fail"),
                         )
                         .await?;
                         conditions.push(ApplicationCondition::input_failed(&format!(
-                            "Input '{}' Secret {}.{} not found",
-                            input.name, my_ns, secret.name
+                            "Input '{}' have no source",
+                            input.name
                         )));
+                        conditions.push(ApplicationCondition::not_ready(&format!(
+                            "Input '{}' have no source",
+                            input.name
+                        )));
+                        let new_status = Patch::Apply(json!({
+                            "apiVersion": "kuberest.solidite.fr/v1",
+                            "kind": "RestEndPoint",
+                            "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+                        }));
+                        let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+                        let _o = restendpoints
+                            .patch_status(&name, &ps, &new_status)
+                            .await
+                            .map_err(Error::KubeError)?;
+                        return Err(Error::IllegalRestEndPoint);
                     }
-                } else if let Some(cfgmap) = input.config_map_ref {
-                    let my_ns = if use_multi {
-                        if let Some(o_ns) = cfgmap.namespace.clone() {
-                            if allowed.contains(&o_ns) {
-                                o_ns
-                            } else {
-                                Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
-                                ns.clone()
-                            }
-                        } else {
-                            ns.clone()
-                        }
-                    } else if let Some(local_ns) = cfgmap.namespace {
-                        local_ns
-                    } else {
-                        ns.clone()
-                    };
-                    let mut maps = ConfigMapHandler::new(&ctx.client.clone(), &my_ns);
-                    if maps.have(&cfgmap.name).await {
-                        let my_cfg = maps.get(&cfgmap.name).await.unwrap();
-                        values["input"][input.name] = serde_json::json!({
-                            "metadata": my_cfg.metadata,
-                            "data": my_cfg.data,
-                            "binaryData": my_cfg.binary_data
-                        });
-                    } else if cfgmap.optional.unwrap_or(false) {
-                        Self::publish(
-                            &recorder,
-                            String::from("IgnoredInput"),
-                            format!("Ignoring not found ConfigMap for Input '{}'", input.name),
-                            String::from("readingInput"),
-                        )
-                        .await?;
-                        conditions.push(ApplicationCondition::input_missing(&format!(
-                            "Input '{}' ConfigMap {}.{} not found",
-                            input.name, my_ns, cfgmap.name
-                        )));
-                        values["input"][input.name] = serde_json::json!({});
-                    } else {
-                        Self::publish(
-                            &recorder,
-                            String::from("MissingConfigMap"),
-                            format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
-                            String::from("readingInput"),
-                        )
-                        .await?;
-                        conditions.push(ApplicationCondition::input_failed(&format!(
-                            "Input '{}' ConfigMap {}.{} not found",
-                            input.name, my_ns, cfgmap.name
-                        )));
-                    }
-                } else if let Some(render) = input.handle_bars_render {
-                    values["input"][input.name] =
-                        json!(template!(render.as_str(), hbs, &values, conditions, recorder));
-                } else if let Some(password_def) = input.password_generator {
-                    values["input"][input.name] = json!(Passwords::new().generate(
-                        password_def.length.unwrap_or(32),
-                        password_def.weight_alphas.unwrap_or(60),
-                        password_def.weight_numbers.unwrap_or(20),
-                        password_def.weight_symbols.unwrap_or(20)
-                    ));
-                } else {
-                    Self::publish_warning(
-                        &recorder,
-                        String::from("EmptyInput"),
-                        format!("Input '{}' have no source", input.name),
-                        String::from("fail"),
-                    )
-                    .await?;
-                    conditions.push(ApplicationCondition::input_failed(&format!(
-                        "Input '{}' have no source",
-                        input.name
-                    )));
-                    conditions.push(ApplicationCondition::not_ready(&format!(
-                        "Input '{}' have no source",
-                        input.name
-                    )));
-                    let new_status = Patch::Apply(json!({
-                        "apiVersion": "kuberest.solidite.fr/v1",
-                        "kind": "RestEndPoint",
-                        "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
-                    }));
-                    let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
-                    let _o = restendpoints
-                        .patch_status(&name, &ps, &new_status)
-                        .await
-                        .map_err(Error::KubeError)?;
-                    return Err(Error::IllegalRestEndPoint);
                 }
             }
+            rhai.set_dynamic("input", &values["input"]);
+            rhai.set_dynamic("values", &values);
         }
-        rhai.set_dynamic("input", &values["input"]);
-        rhai.set_dynamic("values", &values);
+
         // Setup the httpClient
         let mut rest = RestClient::new(&template!(
             self.spec.client.baseurl.clone().as_str(),
@@ -1720,37 +1744,39 @@ impl RestEndPoint {
             conditions,
             recorder
         ));
-        if let Some(headers) = self.spec.client.headers.clone() {
-            for (key, value) in headers {
-                rest.add_header(
-                    &template!(key.as_str(), hbs, &values, conditions, recorder),
-                    &template!(value.as_str(), hbs, &values, conditions, recorder),
+        if do_prepare_client {
+            if let Some(headers) = self.spec.client.headers.clone() {
+                for (key, value) in headers {
+                    rest.add_header(
+                        &template!(key.as_str(), hbs, &values, conditions, recorder),
+                        &template!(value.as_str(), hbs, &values, conditions, recorder),
+                    );
+                }
+            }
+            rest.add_header_json();
+            if let Some(ca) = self.spec.client.server_ca.clone() {
+                rest.set_server_ca(&template!(&ca.as_str(), hbs, &values, conditions, recorder));
+            }
+            if self.spec.client.client_cert.is_some() && self.spec.client.client_key.is_some() {
+                rest.set_mtls(
+                    &template!(
+                        &self.spec.client.client_cert.clone().unwrap().as_str(),
+                        hbs,
+                        &values,
+                        conditions,
+                        recorder
+                    ),
+                    &template!(
+                        &self.spec.client.client_key.clone().unwrap().as_str(),
+                        hbs,
+                        &values,
+                        conditions,
+                        recorder
+                    ),
                 );
             }
+            rhai.ctx.set_or_push("client", rest.clone());
         }
-        rest.add_header_json();
-        if let Some(ca) = self.spec.client.server_ca.clone() {
-            rest.set_server_ca(&template!(&ca.as_str(), hbs, &values, conditions, recorder));
-        }
-        if self.spec.client.client_cert.is_some() && self.spec.client.client_key.is_some() {
-            rest.set_mtls(
-                &template!(
-                    &self.spec.client.client_cert.clone().unwrap().as_str(),
-                    hbs,
-                    &values,
-                    conditions,
-                    recorder
-                ),
-                &template!(
-                    &self.spec.client.client_key.clone().unwrap().as_str(),
-                    hbs,
-                    &values,
-                    conditions,
-                    recorder
-                ),
-            );
-        }
-        rhai.ctx.set_or_push("client", rest.clone());
 
         let mut owned_new: Vec<OwnedObjects> = Vec::new();
         let mut target_new: Vec<OwnedRestPoint> = Vec::new();

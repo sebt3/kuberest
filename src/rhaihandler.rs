@@ -30,6 +30,9 @@ impl Script {
             .register_fn("log_info", |s: ImmutableString| tracing::info!("{s}"))
             .register_fn("log_warn", |s: ImmutableString| tracing::warn!("{s}"))
             .register_fn("log_error", |s: ImmutableString| tracing::error!("{s}"))
+            .register_fn("bcrypt_hash", |s: ImmutableString| {
+                crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)
+            })
             .register_fn("gen_password", |len: u32| -> String {
                 Passwords::new().generate(len, 6, 2, 2)
             })

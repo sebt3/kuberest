@@ -1,6 +1,6 @@
 [package]
 name = "kuberest"
-version = "1.1.4"
+version = "1.1.5"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 default-run = "controller"
@@ -80,6 +80,7 @@ reqwest = { version = "0.12.4", features = ["rustls-tls"] }
 base64 = "0.22.1"
 rand = "0.8.5"
 argon2 = { version = "0.5.3", features = ["std"] }
+bcrypt = "0.16.0"
 
 [dev-dependencies]
 assert-json-diff = "2.0.2"

@@ -1012,9 +1012,11 @@ impl RestEndPoint {
                     )
                     .unwrap_or_else(|e| {
                         conditions.push(ApplicationCondition::write_failed(&format!(
-                            "Templating write.{}.{}.values raised {e:?}",
+                            "Templating write.{}.{}.values \n{}\nusing values: \n{}\nraised {e:?}",
                             group.name.clone(),
-                            item.name
+                            item.name,
+                            item.values.as_str(),
+                            serde_yaml::to_string(&values).unwrap_or_default()
                         )));
                         json!({})
                     });
@@ -1583,7 +1585,10 @@ impl RestEndPoint {
         } else if self.spec.teardown.is_none() {
             // no teardown script, only prepare client if there are some write to delete
             let status = self.status.clone().unwrap();
-            do_prepare_client = status.owned_target.is_empty();
+            do_prepare_client = !status.owned_target.is_empty();
+        }
+        if !do_prepare_client {
+            tracing::info!("Skipping to prepare the client");
         }
         let mut rhai = Script::new();
         rhai.ctx.set_or_push("hbs", hbs.clone());

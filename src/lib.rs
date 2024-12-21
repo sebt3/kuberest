@@ -36,6 +36,9 @@ pub enum Error {
     #[error("Argon2 password_hash error {0}")]
     Argon2hash(#[from] argon2::password_hash::Error),
 
+    #[error("Bcrypt hash error {0}")]
+    BcryptError(#[from] bcrypt::BcryptError),
+
     #[error("Unsupported method")]
     UnsupportedMethod,
 

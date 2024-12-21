@@ -3,6 +3,7 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
 };
+use bcrypt::{hash, DEFAULT_COST};
 
 #[derive(Clone, Debug)]
 pub struct Argon {
@@ -35,4 +36,8 @@ impl Argon {
     pub fn rhai_hash(&mut self, password: String) -> RhaiRes<String> {
         self.hash(password).map_err(rhai_err)
     }
+}
+
+pub fn bcrypt_hash(password: String) -> Result<String> {
+    hash(&password, DEFAULT_COST).map_err(Error::BcryptError)
 }

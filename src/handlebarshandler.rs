@@ -1,4 +1,8 @@
-use crate::{hasheshandlers::Argon, passwordhandler::Passwords, Error, Result, RhaiRes};
+use crate::{
+    hasheshandlers::{self, Argon},
+    passwordhandler::Passwords,
+    Error, Result, RhaiRes,
+};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use handlebars::{handlebars_helper, Handlebars};
 use handlebars_misc_helpers::new_hbs;
@@ -33,6 +37,13 @@ handlebars_helper!(argon_hash: |password:Value| Argon::new().hash(password.as_st
     warn!("handlebars::argon_hash failed to convert to string with: {e:?}");
     String::new()
 }));
+handlebars_helper!(bcrypt_hash: |password:Value| hasheshandlers::bcrypt_hash(password.as_str().unwrap_or_else(|| {
+    warn!("handlebars::bcrypt_hash received a non-string password: {:?}",password);
+    ""
+}).to_string()).unwrap_or_else(|e| {
+    warn!("handlebars::bcrypt_hash failed to convert to string with: {e:?}");
+    String::new()
+}));
 handlebars_helper!(gen_password: |len:u32| Passwords::new().generate(len, 6, 2, 2));
 handlebars_helper!(gen_password_alphanum:  |len:u32| Passwords::new().generate(len, 8, 2, 0));
 
@@ -48,6 +59,7 @@ impl HandleBars<'_> {
         engine.register_helper("base64_encode", Box::new(base64_encode));
         engine.register_helper("header_basic", Box::new(header_basic));
         engine.register_helper("argon_hash", Box::new(argon_hash));
+        engine.register_helper("bcrypt_hash", Box::new(bcrypt_hash));
         engine.register_helper("gen_password", Box::new(gen_password));
         engine.register_helper("gen_password_alphanum", Box::new(gen_password_alphanum));
         // TODO: add more helpers

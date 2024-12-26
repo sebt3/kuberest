@@ -676,12 +676,9 @@ impl RestClient {
         path: &str,
         key: &str,
         input: &Value,
-        use_slash: bool,
     ) -> Result<Value, Error> {
         let full_path = if key.is_empty() {
             path.to_string()
-        } else if use_slash {
-            format!("{path}/{key}/")
         } else {
             format!("{path}/{key}")
         };

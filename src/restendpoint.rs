@@ -249,6 +249,7 @@ pub enum ConditionsType {
     InputMissing,
     InputFailed,
     TemplateFailed,
+    InitScriptFailed,
     PreScriptFailed,
     PostScriptFailed,
     TeardownScriptFailed,
@@ -307,6 +308,10 @@ impl ApplicationCondition {
             ConditionsStatus::True,
             ConditionsType::OutputAlreadyExist,
         )
+    }
+
+    pub fn init_script_failed(message: &str) -> ApplicationCondition {
+        ApplicationCondition::new(message, ConditionsStatus::True, ConditionsType::InitScriptFailed)
     }
 
     pub fn pre_script_failed(message: &str) -> ApplicationCondition {
@@ -455,6 +460,8 @@ pub struct RestEndPointSpec {
     pub templates: Option<Vec<TemplateItem>>,
     /// List input source for Handlebars renders
     pub inputs: Option<Vec<InputItem>>,
+    /// A rhai pre-script to setup some complex variables before client setup
+    pub init: Option<String>,
     /// Define the how the client should connect to the API endpoint(s)
     pub client: WebClient,
     /// A rhai pre-script to setup some complex variables
@@ -824,6 +831,45 @@ impl RestEndPoint {
         rhai.set_dynamic("input", &values["input"]);
         rhai.set_dynamic("values", &values);
 
+        // Run the init script
+        if let Some(script) = self.spec.init.clone() {
+            let cnd = conditions.clone();
+            values["init"] = rhai.eval(&script).unwrap_or_else(|e| {
+                conditions.push(ApplicationCondition::init_script_failed(&format!("{e:?}")));
+                json!({})
+            });
+            // Validate that init-script went Ok
+            if cnd
+                .iter()
+                .any(|c| c.condition_type != ConditionsType::InputMissing)
+            {
+                let msg = "Init-script failed";
+                Self::publish_warning(
+                    &recorder,
+                    String::from(msg),
+                    format!("Found {} error(s) running the init-script", conditions.len()),
+                    String::from("fail"),
+                )
+                .await?;
+                conditions.push(ApplicationCondition::not_ready(msg));
+                let new_status = Patch::Apply(json!({
+                    "apiVersion": "kuberest.solidite.fr/v1",
+                    "kind": "RestEndPoint",
+                    "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+                }));
+                let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+                let _o = restendpoints
+                    .patch_status(&name, &ps, &new_status)
+                    .await
+                    .map_err(Error::KubeError)?;
+                return Ok(Action::requeue(Duration::from_secs(
+                    self.spec.check_frequency.unwrap_or(15 * 60),
+                )));
+            }
+        }
+        rhai.set_dynamic("init", &values["init"]);
+        rhai.set_dynamic("values", &values);
+
         // Setup the httpClient
         let mut rest = RestClient::new(&template!(
             self.spec.client.baseurl.clone().as_str(),
@@ -1056,7 +1102,6 @@ impl RestEndPoint {
                                         path.as_str(),
                                         &myself.key,
                                         &vals,
-                                        group.key_use_slash.unwrap_or(false),
                                     )
                                     .unwrap_or_else(|e| {
                                         giveup = if let Error::MethodFailed(_, code, _) = e {
@@ -1738,6 +1783,45 @@ impl RestEndPoint {
                 }
             }
             rhai.set_dynamic("input", &values["input"]);
+            rhai.set_dynamic("values", &values);
+
+            // Run the init script
+            if let Some(script) = self.spec.init.clone() {
+                let cnd = conditions.clone();
+                values["init"] = rhai.eval(&script).unwrap_or_else(|e| {
+                    conditions.push(ApplicationCondition::init_script_failed(&format!("{e:?}")));
+                    json!({})
+                });
+                // Validate that init-script went Ok
+                if cnd
+                    .iter()
+                    .any(|c| c.condition_type != ConditionsType::InputMissing)
+                {
+                    let msg = "Init-script failed";
+                    Self::publish_warning(
+                        &recorder,
+                        String::from(msg),
+                        format!("Found {} error(s) running the init-script", conditions.len()),
+                        String::from("fail"),
+                    )
+                    .await?;
+                    conditions.push(ApplicationCondition::not_ready(msg));
+                    let new_status = Patch::Apply(json!({
+                        "apiVersion": "kuberest.solidite.fr/v1",
+                        "kind": "RestEndPoint",
+                        "status": RestEndPointStatus { conditions, generation: self.metadata.generation.unwrap_or(1), owned: self.owned(), owned_target: self.owned_target() }
+                    }));
+                    let ps = PatchParams::apply(RESTPATH_FINALIZER).force();
+                    let _o = restendpoints
+                        .patch_status(&name, &ps, &new_status)
+                        .await
+                        .map_err(Error::KubeError)?;
+                    return Ok(Action::requeue(Duration::from_secs(
+                        self.spec.check_frequency.unwrap_or(15 * 60),
+                    )));
+                }
+            }
+            rhai.set_dynamic("init", &values["init"]);
             rhai.set_dynamic("values", &values);
         }
 

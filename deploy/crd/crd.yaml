@@ -102,6 +102,10 @@ spec:
                 required:
                 - baseurl
                 type: object
+              init:
+                description: A rhai pre-script to setup some complex variables before client setup
+                nullable: true
+                type: string
               inputs:
                 description: List input source for Handlebars renders
                 items:
@@ -413,6 +417,7 @@ spec:
                       - InputMissing
                       - InputFailed
                       - TemplateFailed
+                      - InitScriptFailed
                       - PreScriptFailed
                       - PostScriptFailed
                       - TeardownScriptFailed

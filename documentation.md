@@ -14,9 +14,9 @@ For more completes examples please see the [one in the repo](https://github.com/
 The following values are populated in the order of the documented flow:
 ![workflow diagram](../kuberest_flow.png "Workflow")
 - `input`
+- `init`
 - `pre`
 - `read`
-- `change`
 - `write`
 - `post`
 
@@ -310,6 +310,8 @@ kuberest use the [handlebars_misc_helpers](https://github.com/davidB/handlebars_
 |gen_password   | length                | Generate a password if specified length  | `gen_password 32`
 |gen_password_alphanum| length          | Generate a password if specified length without any specials characters | `gen_password_alphanum 8 `
 |header_basic   | username, password    | Generate a "Basic *encoded_auth*" value to set with a "Authorization" header | `header_basic (base64_decode input.secret.data.username) (base64_decode input.secret.data.password)`
+|argon_hash   | password    | Hash a password using the Argon2 algorithm | `argon_hash (base64_decode input.secret.data.password)`
+|bcrypt_hash   | password    | Hash a password using the BCrypt algorithm | `bcrypt_hash (base64_decode input.secret.data.password)`
 
 
 ## *rhai* scripts
@@ -318,7 +320,7 @@ kuberest use the [handlebars_misc_helpers](https://github.com/davidB/handlebars_
 
 The only reason why this ability exist is: many of the apps we love have configuration endpoints that do *not* comply with REST (Grafana, SonarQube to name a few). Provoding this ability come with risk of abuses. Dont, for your own cluster safety ;)
 
-All rhai scripts (pre/change/post/teardown) are expected to return a `Map`, so the most minimal script is:
+All rhai scripts (init/pre/post/teardown) are expected to return a `Map`, so the most minimal script is:
 ```rhai
 #{}
 ```
@@ -380,6 +382,9 @@ spec:
 | json_decode | encoded_data (string) | any | convert any json formated data to their rhai object/array/... conterpart | `let data = json_decode("{\\"name\\":\\"paul\\"}");`
 | yaml_encode | data (any) | string | Convert any data to their YAML representation string | `let encoded = yaml_encode(#{test: "value"});`
 | yaml_decode | encoded_data (string) | any | convert any YAML formated data to their rhai object/array/... conterpart | `let data = yaml_decode("name: paul");`
+| yaml_decode_multi | encoded_data (string) | array | convert a multi-document yaml string into an array of the corresponding object/array/... | `let data = yaml_decode_multi("name: paul");`
+| bcrypt_hash | password | string | hash a clear-text password using the bcrypt algorithm | `let hash = bcrypt_hash("my_secret_password");`
+| new_argon().hash | password | string | hash a clear-text password using the Argon2 algorithm | `let hasher = new_argon();let hash = hasher.hash("my_secret_password");`
 
 ### The `hbs` object
 
@@ -395,20 +400,22 @@ From rhai you have a complete access to the REST client used in kuberest using t
 
 |Method         | Arguments             | Return | Description   | Example |
 |---            |---                    |---     |---            |---      |
-| http_get  | path(string) | object | do an HTTP GET on `path` | `let res = client.http_get("projects");` |
-| http_delete  | path(string) | object | do an HTTP DELETE on `path` | `let res = client.http_delete("projects/1345/groups/43");` |
-| http_patch  | path(string), values (object) | object | do an HTTP PATCH on `path` | `let res = client.http_patch("projects/1345/groups/43", #{name: "test"});` |
-| http_post  | path(string), values (object) | object | do an HTTP POST on `path` | `let res = client.http_post("projects/1345/groups/43", #{name: "test"});` |
-| http_put  | path(string), values (object) | object | do an HTTP PUT on `path` | `let res = client.http_put("projects/1345/groups/43", #{name: "test"});` |
+| head  | path(string) | object | do an HTTP HEAD on `path` | `let res = client.head("projects");` |
+| get  | path(string) | object | do an HTTP GET on `path` | `let res = client.get("projects");` |
+| delete  | path(string) | object | do an HTTP DELETE on `path` | `let res = client.delete("projects/1345/groups/43");` |
+| patch  | path(string), values (object) | object | do an HTTP PATCH on `path` | `let res = client.patch("projects/1345/groups/43", #{name: "test"});` |
+| post  | path(string), values (object) | object | do an HTTP POST on `path` | `let res = client.post("projects/1345/groups/43", #{name: "test"});` |
+| put  | path(string), values (object) | object | do an HTTP PUT on `path` | `let res = client.put("projects/1345/groups/43", #{name: "test"});` |
 
 In the context of duplicating data to an other service, you can create an other client:
 ```rhai
 let target = new_client("https://gitlab.com/api/v4");
 target.add_header("add_header", "Bearer "+base64_decode(input.gitlab.data.token));
 target.add_header_json();
-let prjs = target.http_get("projects");
+let prjs = target.get("projects");
 ...
 ```
+
 |Method         | Arguments             | Description   |
 |---            |---                    |---            |
 | new_client    | baseurl(string)  | Create a new http client |

@@ -190,6 +190,8 @@ pub struct WriteGroup {
     pub read_method: Option<ReadMethod>,
     /// Method to use when updating an object (default: Patch)
     pub update_method: Option<UpdateMethod>,
+    /// Path to use to update/delete this write_group
+    pub update_path: Option<String>,
     /// Method to use when deleting an object (default: Delete)
     pub delete_method: Option<DeleteMethod>,
     /// The list of object mapping
@@ -1099,7 +1101,7 @@ impl RestEndPoint {
                                                 .clone()
                                                 .unwrap_or(UpdateMethod::Patch),
                                         ),
-                                        path.as_str(),
+                                        group.update_path.clone().unwrap_or(path.clone()).as_str(),
                                         &myself.key,
                                         &vals,
                                     )
@@ -1183,7 +1185,7 @@ impl RestEndPoint {
                                 key.as_str()
                             };
                             target_new.push(OwnedRestPoint::new(
-                                path.as_str(),
+                                group.update_path.clone().unwrap_or(path.clone()).as_str(),
                                 my_key,
                                 group.name.as_str(),
                                 item.name.as_str(),

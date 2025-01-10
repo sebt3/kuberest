@@ -24,6 +24,7 @@ use kube::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use serde_json_path::JsonPath;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{runtime::Handle, sync::RwLock, time::Duration};
 use tracing::*;
@@ -148,6 +149,10 @@ pub struct ReadGroupItem {
     pub name: String,
     /// configuration of this object
     pub key: String,
+    /// Allow missing object (default false)
+    pub optional: Option<bool>,
+    /// Get the result from a json-query
+    pub json_query: Option<String>,
 }
 /// ReadGroup describe a rest endpoint within the client sub-paths,
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -164,13 +169,18 @@ pub struct ReadGroup {
 
 /// writeGroupItem describe an object to maintain within
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct WriteGroupItem {
     /// name of the item (used for handlebars renders: write.<group>.<name>)
     pub name: String,
     /// configuration of this object (yaml format, use handlebars to generate your needed values)
     pub values: String,
     /// Delete the Object on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)
-    teardown: Option<bool>,
+    pub teardown: Option<bool>,
+    /// If writes doesnt return values, use this read query to re-read
+    pub read_path: Option<String>,
+    /// If writes doesnt return values, (only used when readPath is specified too)
+    pub read_json_query: Option<String>,
 }
 /// writeGroup describe a rest endpoint within the client sub-paths,
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema)]
@@ -184,9 +194,9 @@ pub struct WriteGroup {
     pub key_name: Option<String>,
     /// keyUseSlash: should the update/delete url end with a slash at the end (default: false)
     pub key_use_slash: Option<bool>,
-    /// Method to use when creating an object (default: Get)
+    /// Method to use when creating an object (default: Post)
     pub create_method: Option<CreateMethod>,
-    /// Method to use when reading an object (default: Post)
+    /// Method to use when reading an object (default: Get)
     pub read_method: Option<ReadMethod>,
     /// Method to use when updating an object (default: Patch)
     pub update_method: Option<UpdateMethod>,
@@ -256,6 +266,8 @@ pub enum ConditionsType {
     PostScriptFailed,
     TeardownScriptFailed,
     ReadFailed,
+    ReadMissing,
+    ReReadFailed,
     WriteFailed,
     WriteDeleteFailed,
     WriteAlreadyExist,
@@ -344,12 +356,20 @@ impl ApplicationCondition {
         ApplicationCondition::new(message, ConditionsStatus::True, ConditionsType::TemplateFailed)
     }
 
+    pub fn read_missing(message: &str) -> ApplicationCondition {
+        ApplicationCondition::new(message, ConditionsStatus::True, ConditionsType::ReadMissing)
+    }
+
     pub fn read_failed(message: &str) -> ApplicationCondition {
         ApplicationCondition::new(message, ConditionsStatus::True, ConditionsType::ReadFailed)
     }
 
     pub fn write_failed(message: &str) -> ApplicationCondition {
         ApplicationCondition::new(message, ConditionsStatus::True, ConditionsType::WriteFailed)
+    }
+
+    pub fn reread_failed(message: &str) -> ApplicationCondition {
+        ApplicationCondition::new(message, ConditionsStatus::True, ConditionsType::ReReadFailed)
     }
 
     pub fn write_delete_failed(message: &str) -> ApplicationCondition {
@@ -476,8 +496,10 @@ pub struct RestEndPointSpec {
     pub post: Option<String>,
     /// Objects (Secret or ConfigMap) to create at the end of the process
     pub outputs: Option<Vec<OutputItem>>,
-    /// checkFrequency define the pooling interval (in seconds, default: 300)
+    /// checkFrequency define the pooling interval (in seconds, default: 3600 aka 1h)
     pub check_frequency: Option<u64>,
+    /// retryFrequency define the pooling interval if previous try have failed (in seconds, default: 300 aka 5mn)
+    pub retry_frequency: Option<u64>,
     /// A rhai teardown-script for a final cleanup on RestEndPoint deletion
     pub teardown: Option<String>,
 }
@@ -548,7 +570,7 @@ impl RestEndPoint {
     async fn publish(recorder: &Recorder, reason: String, note_p: String, action: String) -> Result<()> {
         let mut note = note_p;
         note.truncate(1023);
-        recorder
+        match recorder
             .publish(Event {
                 type_: EventType::Normal,
                 reason,
@@ -557,7 +579,23 @@ impl RestEndPoint {
                 secondary: None,
             })
             .await
-            .map_err(Error::KubeError)
+        {
+            Ok(_) => Ok(()),
+            Err(e) => match e {
+                kube::Error::Api(src) => {
+                    if !src
+                        .message
+                        .as_str()
+                        .contains("unable to create new content in namespace")
+                        || !src.message.as_str().contains("being terminated")
+                    {
+                        tracing::warn!("Ignoring {:?} while sending an event", src);
+                    }
+                    Ok(())
+                }
+                _ => Err(Error::KubeError(e)),
+            },
+        }
     }
 
     async fn publish_warning(
@@ -568,7 +606,7 @@ impl RestEndPoint {
     ) -> Result<()> {
         let mut note = note_p;
         note.truncate(1023);
-        recorder
+        match recorder
             .publish(Event {
                 type_: EventType::Warning,
                 reason,
@@ -577,7 +615,23 @@ impl RestEndPoint {
                 secondary: None,
             })
             .await
-            .map_err(Error::KubeError)
+        {
+            Ok(_) => Ok(()),
+            Err(e) => match e {
+                kube::Error::Api(src) => {
+                    if !src
+                        .message
+                        .as_str()
+                        .contains("unable to create new content in namespace")
+                        || !src.message.as_str().contains("being terminated")
+                    {
+                        tracing::warn!("Ignoring {:?} while sending an event", src);
+                    }
+                    Ok(())
+                }
+                _ => Err(Error::KubeError(e)),
+            },
+        }
     }
 
     async fn get_tenant_namespaces(&self, client: Client) -> Result<Vec<String>> {
@@ -607,16 +661,28 @@ impl RestEndPoint {
     async fn reconcile(&self, ctx: Arc<Context>) -> Result<Action> {
         // Before everything : is this reconcillation because of our last status update ?
         if let Some(status) = self.status.clone() {
-            let next = self.spec.check_frequency.unwrap_or(15 * 60);
             let now = chrono::offset::Utc::now();
             if status.generation == self.metadata.generation.unwrap_or(1) {
                 let delta: u64 = (now - status.conditions[0].last_transition_time.unwrap_or(now))
                     .num_seconds()
                     .try_into()
                     .unwrap();
-                if delta < next {
-                    debug!("The spec didnt change, only the status (which this code just did), waiting {} more secs",next-delta);
-                    return Ok(Action::requeue(Duration::from_secs(next - delta)));
+                if status
+                    .conditions
+                    .into_iter()
+                    .any(|c| c.status == ConditionsStatus::False && c.condition_type == ConditionsType::Ready)
+                {
+                    let next = self.spec.retry_frequency.unwrap_or(5 * 60);
+                    if delta < next {
+                        debug!("The spec didnt change, only the status (which this code just did), waiting {} more secs",next-delta);
+                        return Ok(Action::requeue(Duration::from_secs(next - delta)));
+                    }
+                } else {
+                    let next = self.spec.check_frequency.unwrap_or(60 * 60);
+                    if delta < next {
+                        debug!("The spec didnt change, only the status (which this code just did), waiting {} more secs",next-delta);
+                        return Ok(Action::requeue(Duration::from_secs(next - delta)));
+                    }
                 }
             }
         }
@@ -826,7 +892,7 @@ impl RestEndPoint {
                 return Ok(Action::requeue(Duration::from_secs(60)));
             } else {
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.unwrap_or(15 * 60),
+                    self.spec.retry_frequency.unwrap_or(5 * 60),
                 )));
             }
         }
@@ -865,7 +931,7 @@ impl RestEndPoint {
                     .await
                     .map_err(Error::KubeError)?;
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.unwrap_or(15 * 60),
+                    self.spec.retry_frequency.unwrap_or(5 * 60),
                 )));
             }
         }
@@ -936,7 +1002,7 @@ impl RestEndPoint {
                 .await
                 .map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.unwrap_or(15 * 60),
+                self.spec.retry_frequency.unwrap_or(5 * 60),
             )));
         }
         rhai.ctx.set_or_push("client", rest.clone());
@@ -973,7 +1039,7 @@ impl RestEndPoint {
                     .await
                     .map_err(Error::KubeError)?;
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.unwrap_or(15 * 60),
+                    self.spec.retry_frequency.unwrap_or(5 * 60),
                 )));
             }
         }
@@ -986,7 +1052,7 @@ impl RestEndPoint {
                 values["read"][group.name.clone()] = serde_json::json!({});
                 let path = template!(group.path.as_str(), hbs, &values, conditions, recorder);
                 for read in group.items {
-                    values["read"][group.name.clone()][read.name] =
+                    let result =
                         rest.clone()
                             .obj_read(
                                 group.read_method.clone().unwrap_or(
@@ -996,22 +1062,42 @@ impl RestEndPoint {
                                 &template!(read.key.as_str(), hbs, &values, conditions, recorder),
                             )
                             .unwrap_or_else(|e| {
-                                conditions.push(ApplicationCondition::read_failed(&format!(
-                                    "Reading read.{}.{} raised {e:?}",
-                                    group.name.clone(),
-                                    read.name
-                                )));
+                                if read.optional.unwrap_or(false) {
+                                    conditions.push(ApplicationCondition::read_missing(&format!(
+                                        "Reading read.{}.{} raised {e:?}",
+                                        group.name.clone(),
+                                        read.name
+                                    )));
+                                } else {
+                                    conditions.push(ApplicationCondition::read_failed(&format!(
+                                        "Reading read.{}.{} raised {e:?}",
+                                        group.name.clone(),
+                                        read.name
+                                    )));
+                                }
                                 json!({})
                             });
+                    let mut obj = result.clone();
+                    if let Some(json_path) = read.json_query {
+                        let _ = JsonPath::parse(&json_path).map(|path| {
+                            obj = path
+                                .query(&result)
+                                .at_most_one()
+                                .unwrap_or(Some(&result))
+                                .unwrap_or(&result)
+                                .clone();
+                        });
+                    }
+                    values["read"][group.name.clone()][read.name] = obj;
                 }
             }
         }
         // Validate that all reads went Ok
         let cnd = conditions.clone();
-        if cnd
-            .iter()
-            .any(|c| c.condition_type != ConditionsType::InputMissing)
-        {
+        if cnd.iter().any(|c| {
+            c.condition_type != ConditionsType::InputMissing
+                && c.condition_type != ConditionsType::ReadMissing
+        }) {
             let msg = "Some read have failed";
             Self::publish_warning(
                 &recorder,
@@ -1037,7 +1123,7 @@ impl RestEndPoint {
                 return Ok(Action::requeue(Duration::from_secs(60)));
             } else {
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.unwrap_or(15 * 60),
+                    self.spec.retry_frequency.unwrap_or(5 * 60),
                 )));
             }
         }
@@ -1091,7 +1177,7 @@ impl RestEndPoint {
                                 )));
                                 "".to_string()
                             } else {
-                                let obj = rest
+                                let mut obj = rest
                                     .clone()
                                     .obj_update(
                                         group.update_method.clone().unwrap_or(
@@ -1111,13 +1197,64 @@ impl RestEndPoint {
                                         } else {
                                             false
                                         };
-                                        conditions.push(ApplicationCondition::write_failed(&format!(
-                                            "Updating write.{}.{} raised {e:?}",
-                                            group.name.clone(),
-                                            item.name
-                                        )));
+                                        match e {
+                                            Error::JsonError(_) => {
+                                                if item.read_path.is_none() {
+                                                    conditions.push(ApplicationCondition::write_failed(
+                                                        &format!(
+                                                            "Updating write.{}.{} raised {e:?}",
+                                                            group.name.clone(),
+                                                            item.name
+                                                        ),
+                                                    ));
+                                                }
+                                            }
+                                            _ => {
+                                                conditions.push(ApplicationCondition::write_failed(
+                                                    &format!(
+                                                        "Updating write.{}.{} raised {e:?}",
+                                                        group.name.clone(),
+                                                        item.name
+                                                    ),
+                                                ));
+                                            }
+                                        }
                                         json!({})
                                     });
+                                if let Some(read_path) = item.read_path.clone() {
+                                    let my_read = rest
+                                        .clone()
+                                        .obj_read(
+                                            group.read_method.clone().unwrap_or(
+                                                self.spec
+                                                    .client
+                                                    .read_method
+                                                    .clone()
+                                                    .unwrap_or(ReadMethod::Get),
+                                            ),
+                                            read_path.as_str(),
+                                            "",
+                                        )
+                                        .unwrap_or_else(|e| {
+                                            conditions.push(ApplicationCondition::reread_failed(&format!(
+                                                "Reading back write.{}.{} raised {e:?}",
+                                                group.name.clone(),
+                                                item.name
+                                            )));
+                                            json!({})
+                                        });
+                                    obj = my_read.clone();
+                                    if let Some(json_path) = item.read_json_query.clone() {
+                                        let _ = JsonPath::parse(&json_path).map(|path| {
+                                            obj = path
+                                                .query(&my_read)
+                                                .at_most_one()
+                                                .unwrap_or(Some(&my_read))
+                                                .unwrap_or(&my_read)
+                                                .clone();
+                                        });
+                                    }
+                                }
                                 values["write"][group.name.clone()][item.name.clone()] = obj.clone();
                                 let key_name_moved = key_name.clone();
                                 if obj[key_name.clone()].is_i64() {
@@ -1141,7 +1278,7 @@ impl RestEndPoint {
                             } else {
                                 path.as_str()
                             };
-                            let obj = rest
+                            let mut obj = rest
                                 .clone()
                                 .obj_create(
                                     group.create_method.clone().unwrap_or(
@@ -1155,13 +1292,58 @@ impl RestEndPoint {
                                     &vals,
                                 )
                                 .unwrap_or_else(|e| {
-                                    conditions.push(ApplicationCondition::write_failed(&format!(
-                                        "Creating write.{}.{} raised {e:?}",
-                                        group.name.clone(),
-                                        item.name
-                                    )));
+                                    match e {
+                                        Error::JsonError(_) => {
+                                            if item.read_path.is_none() {
+                                                conditions.push(ApplicationCondition::write_failed(
+                                                    &format!(
+                                                        "Creating write.{}.{} raised {e:?}",
+                                                        group.name.clone(),
+                                                        item.name
+                                                    ),
+                                                ));
+                                            }
+                                        }
+                                        _ => {
+                                            conditions.push(ApplicationCondition::write_failed(&format!(
+                                                "Creating write.{}.{} raised {e:?}",
+                                                group.name.clone(),
+                                                item.name
+                                            )));
+                                        }
+                                    }
                                     json!({})
                                 });
+                            if let Some(read_path) = item.read_path.clone() {
+                                let my_read = rest
+                                    .clone()
+                                    .obj_read(
+                                        group.read_method.clone().unwrap_or(
+                                            self.spec.client.read_method.clone().unwrap_or(ReadMethod::Get),
+                                        ),
+                                        read_path.as_str(),
+                                        "",
+                                    )
+                                    .unwrap_or_else(|e| {
+                                        conditions.push(ApplicationCondition::reread_failed(&format!(
+                                            "Reading back write.{}.{} raised {e:?}",
+                                            group.name.clone(),
+                                            item.name
+                                        )));
+                                        json!({})
+                                    });
+                                obj = my_read.clone();
+                                if let Some(json_path) = item.read_json_query.clone() {
+                                    let _ = JsonPath::parse(&json_path).map(|path| {
+                                        obj = path
+                                            .query(&my_read)
+                                            .at_most_one()
+                                            .unwrap_or(Some(&my_read))
+                                            .unwrap_or(&my_read)
+                                            .clone();
+                                    });
+                                }
+                            }
                             values["write"][group.name.clone()][item.name.clone()] = obj.clone();
                             let key_name_moved = key_name.clone();
                             if obj[key_name.clone()].is_i64() {
@@ -1248,6 +1430,7 @@ impl RestEndPoint {
         let cnd = conditions.clone();
         if cnd.iter().any(|c| {
             c.condition_type != ConditionsType::InputMissing
+                && c.condition_type != ConditionsType::ReadMissing
                 && c.condition_type != ConditionsType::WriteAlreadyExist
         }) {
             let msg = "Some writes have failed";
@@ -1270,7 +1453,7 @@ impl RestEndPoint {
                 .await
                 .map_err(Error::KubeError)?;
             return Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.unwrap_or(15 * 60),
+                self.spec.retry_frequency.unwrap_or(5 * 60),
             )));
         }
         rhai.set_dynamic("write", &values["write"]);
@@ -1284,10 +1467,10 @@ impl RestEndPoint {
                 json!({})
             });
             // Validate that post-script went Ok
-            if cnd
-                .iter()
-                .any(|c| c.condition_type != ConditionsType::InputMissing)
-            {
+            if cnd.iter().any(|c| {
+                c.condition_type != ConditionsType::InputMissing
+                    && c.condition_type != ConditionsType::ReadMissing
+            }) {
                 let msg = "Post-script failed";
                 Self::publish_warning(
                     &recorder,
@@ -1308,7 +1491,7 @@ impl RestEndPoint {
                     .await
                     .map_err(Error::KubeError)?;
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.unwrap_or(15 * 60),
+                    self.spec.retry_frequency.unwrap_or(5 * 60),
                 )));
             }
         }
@@ -1356,12 +1539,18 @@ impl RestEndPoint {
                             })
                             .unwrap();
                         if secrets.have_uid(&myself.name, &myself.uid).await {
-                            let _ =
-                                update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
+                            if !secrets.have_with_data(&myself.name, &my_values).await {
+                                let _ = update!(
+                                    secrets, "Secret", output, my_ns, &my_values, conditions, recorder
+                                );
+                            }
                             owned_new.push(myself);
                         } else if secrets.have(&myself.name).await {
-                            let _ =
-                                update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
+                            if !secrets.have_with_data(&myself.name, &my_values).await {
+                                let _ = update!(
+                                    secrets, "Secret", output, my_ns, &my_values, conditions, recorder
+                                );
+                            }
                             if output.teardown.unwrap_or(true) {
                                 conditions.push(ApplicationCondition::output_exist(&format!(
                                     "Secret output '{}.{}' already exist, won't take ownership.",
@@ -1389,7 +1578,10 @@ impl RestEndPoint {
                             }
                         }
                     } else if secrets.have(&output.metadata.name).await {
-                        let _ = update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
+                        if !secrets.have_with_data(&output.metadata.name, &my_values).await {
+                            let _ =
+                                update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
+                        }
                         if output.teardown.unwrap_or(true) {
                             conditions.push(ApplicationCondition::output_exist(&format!(
                                 "Secret output '{}.{}' already exist, won't take ownership.",
@@ -1439,12 +1631,30 @@ impl RestEndPoint {
                             })
                             .unwrap();
                         if cms.have_uid(&myself.name, &myself.uid).await {
-                            let _ =
-                                update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
+                            if !cms.have_with_data(&myself.name, &my_values).await {
+                                let _ = update!(
+                                    cms,
+                                    "ConfigMap",
+                                    output,
+                                    my_ns,
+                                    &my_values,
+                                    conditions,
+                                    recorder
+                                );
+                            }
                             owned_new.push(myself);
                         } else if cms.have(&myself.name).await {
-                            let _ =
-                                update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
+                            if !cms.have_with_data(&myself.name, &my_values).await {
+                                let _ = update!(
+                                    cms,
+                                    "ConfigMap",
+                                    output,
+                                    my_ns,
+                                    &my_values,
+                                    conditions,
+                                    recorder
+                                );
+                            }
                             if output.teardown.unwrap_or(true) {
                                 conditions.push(ApplicationCondition::output_exist(&format!(
                                     "ConfigMap output '{}.{}' already exist, won't take ownership.",
@@ -1479,7 +1689,10 @@ impl RestEndPoint {
                             }
                         }
                     } else if cms.have(&output.metadata.name).await {
-                        let _ = update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
+                        if !cms.have_with_data(&output.metadata.name, &my_values).await {
+                            let _ =
+                                update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
+                        }
                         if output.teardown.unwrap_or(true) {
                             conditions.push(ApplicationCondition::output_exist(&format!(
                                 "ConfigMap output '{}.{}' already exist, won't take ownership.",
@@ -1552,6 +1765,7 @@ impl RestEndPoint {
         // Verify that everything went fine and update the status accordingly
         if conditions.iter().any(|c| {
             c.condition_type != ConditionsType::InputMissing
+                && c.condition_type != ConditionsType::ReadMissing
                 && c.condition_type != ConditionsType::WriteAlreadyExist
                 && c.condition_type != ConditionsType::OutputAlreadyExist
         }) {
@@ -1574,6 +1788,9 @@ impl RestEndPoint {
                 .patch_status(&name, &ps, &new_status)
                 .await
                 .map_err(Error::KubeError)?;
+            Ok(Action::requeue(Duration::from_secs(
+                self.spec.retry_frequency.unwrap_or(5 * 60),
+            )))
         } else {
             let msg = "All done";
             conditions.push(ApplicationCondition::is_ready(msg));
@@ -1587,10 +1804,10 @@ impl RestEndPoint {
                 .patch_status(&name, &ps, &new_status)
                 .await
                 .map_err(Error::KubeError)?;
+            Ok(Action::requeue(Duration::from_secs(
+                self.spec.check_frequency.unwrap_or(60 * 60),
+            )))
         }
-        Ok(Action::requeue(Duration::from_secs(
-            self.spec.check_frequency.unwrap_or(15 * 60),
-        )))
     }
 
     // Finalizer cleanup (the object was deleted, ensure nothing is orphaned)
@@ -1819,7 +2036,7 @@ impl RestEndPoint {
                         .await
                         .map_err(Error::KubeError)?;
                     return Ok(Action::requeue(Duration::from_secs(
-                        self.spec.check_frequency.unwrap_or(15 * 60),
+                        self.spec.retry_frequency.unwrap_or(5 * 60),
                     )));
                 }
             }
@@ -1905,7 +2122,7 @@ impl RestEndPoint {
                     .await
                     .map_err(Error::KubeError)?;
                 return Ok(Action::requeue(Duration::from_secs(
-                    self.spec.check_frequency.unwrap_or(15 * 60),
+                    self.spec.retry_frequency.unwrap_or(5 * 60),
                 )));
             }
         }
@@ -1981,6 +2198,7 @@ impl RestEndPoint {
         }
         if conditions.iter().any(|c| {
             c.condition_type != ConditionsType::InputMissing
+                && c.condition_type != ConditionsType::ReadMissing
                 && c.condition_type != ConditionsType::WriteAlreadyExist
                 && c.condition_type != ConditionsType::OutputAlreadyExist
         }) || !owned_new.is_empty()

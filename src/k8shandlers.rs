@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::restendpoint::{Metadata, RestEndPoint, RESTPATH_FINALIZER};
 use anyhow::{bail, Result};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use kube::{
     api::{Api, DeleteParams, ListParams, ObjectList, Patch, PatchParams, PostParams},
     Client,
@@ -34,6 +35,36 @@ impl SecretHandler {
             }
         }
         false
+    }
+
+    pub async fn have_with_data(&mut self, name: &str, strings: &HashMap<String, String>) -> bool {
+        let list = self.list().await.unwrap();
+        let mut s: Option<Secret> = None;
+        for secret in list {
+            if secret.metadata.name.clone().unwrap_or_default() == name {
+                s = Some(secret.clone());
+                break;
+            }
+        }
+        let mut matched = true;
+        if let Some(secret) = s {
+            if let Some(data) = secret.data {
+                for (k, decoded) in strings {
+                    if serde_json::to_string(&data[k]).unwrap()
+                        != serde_json::to_string(&STANDARD.encode(decoded)).unwrap()
+                    {
+                        tracing::debug!("Unmatched data for {k}");
+                        matched = false;
+                        break;
+                    }
+                }
+                matched
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 
     pub async fn have_uid(&mut self, name: &str, uid: &str) -> bool {
@@ -163,6 +194,34 @@ impl ConfigMapHandler {
             }
         }
         false
+    }
+
+    pub async fn have_with_data(&mut self, name: &str, datas: &HashMap<String, String>) -> bool {
+        let list = self.list().await.unwrap();
+        let mut c: Option<ConfigMap> = None;
+        for cm in list {
+            if cm.metadata.name.clone().unwrap_or_default() == name {
+                c = Some(cm.clone());
+                break;
+            }
+        }
+        let mut matched = true;
+        if let Some(cm) = c {
+            if let Some(data) = cm.data {
+                for (k, val) in datas {
+                    if data[k] != *val {
+                        tracing::debug!("Unmatched data for {k}");
+                        matched = false;
+                        break;
+                    }
+                }
+                matched
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 
     pub async fn get(&mut self, name: &str) -> Result<ConfigMap, kube::Error> {

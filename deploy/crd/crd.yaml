@@ -36,7 +36,7 @@ spec:
             description: Describe the specification of a RestEndPoint
             properties:
               checkFrequency:
-                description: 'checkFrequency define the pooling interval (in seconds, default: 300)'
+                description: 'checkFrequency define the pooling interval (in seconds, default: 3600 aka 1h)'
                 format: uint64
                 minimum: 0.0
                 nullable: true
@@ -258,12 +258,20 @@ spec:
                       items:
                         description: readGroupItem describe an object to read with the client
                         properties:
+                          json_query:
+                            description: Get the result from a json-query
+                            nullable: true
+                            type: string
                           key:
                             description: configuration of this object
                             type: string
                           name:
                             description: name of the item (used for handlebars renders)
                             type: string
+                          optional:
+                            description: Allow missing object (default false)
+                            nullable: true
+                            type: boolean
                         required:
                         - key
                         - name
@@ -288,6 +296,12 @@ spec:
                   type: object
                 nullable: true
                 type: array
+              retryFrequency:
+                description: 'retryFrequency define the pooling interval if previous try have failed (in seconds, default: 300 aka 5mn)'
+                format: uint64
+                minimum: 0.0
+                nullable: true
+                type: integer
               teardown:
                 description: A rhai teardown-script for a final cleanup on RestEndPoint deletion
                 nullable: true
@@ -315,7 +329,7 @@ spec:
                   description: writeGroup describe a rest endpoint within the client sub-paths,
                   properties:
                     createMethod:
-                      description: 'Method to use when creating an object (default: Get)'
+                      description: 'Method to use when creating an object (default: Post)'
                       enum:
                       - Post
                       nullable: true
@@ -333,6 +347,14 @@ spec:
                         properties:
                           name:
                             description: 'name of the item (used for handlebars renders: write.<group>.<name>)'
+                            type: string
+                          readJsonQuery:
+                            description: If writes doesnt return values, (only used when readPath is specified too)
+                            nullable: true
+                            type: string
+                          readPath:
+                            description: If writes doesnt return values, use this read query to re-read
+                            nullable: true
                             type: string
                           teardown:
                             description: 'Delete the Object on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)'
@@ -361,7 +383,7 @@ spec:
                       description: path appended to the client's baseurl for this group of objects
                       type: string
                     readMethod:
-                      description: 'Method to use when reading an object (default: Post)'
+                      description: 'Method to use when reading an object (default: Get)'
                       enum:
                       - Get
                       nullable: true
@@ -376,6 +398,10 @@ spec:
                       - Patch
                       - Put
                       - Post
+                      nullable: true
+                      type: string
+                    updatePath:
+                      description: Path to use to update/delete this write_group
                       nullable: true
                       type: string
                   required:
@@ -422,6 +448,8 @@ spec:
                       - PostScriptFailed
                       - TeardownScriptFailed
                       - ReadFailed
+                      - ReadMissing
+                      - ReReadFailed
                       - WriteFailed
                       - WriteDeleteFailed
                       - WriteAlreadyExist

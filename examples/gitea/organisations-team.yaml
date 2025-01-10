@@ -1,0 +1,111 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: gitea-org-images
+spec:
+  inputs:
+  - name: admin
+    secretRef:
+      name: gitea-admin-user
+  client:
+    baseurl: https://gitea.your-company.com/api/v1
+    headers:
+      Authorization: '{{ header_basic (base64_decode input.admin.data.username) (base64_decode input.admin.data.password) }}'
+  writes:
+  - name: orgs
+    path: orgs
+    keyName: username
+    items:
+    - name: org
+      values: |
+        username: images
+        visibility: public
+        repo_admin_change_team_access: true
+  - name: teams
+    path: orgs/images/teams
+    updatePath: teams
+    items:
+    - name: dev
+      values: |-
+        name: dev
+        includes_all_repositories: true
+        can_create_org_repo: false
+        permission: read
+        units:
+        - repo.issues
+        - repo.ext_issues
+        - repo.releases
+        - repo.ext_wiki
+        - repo.projects
+        - repo.actions
+        - repo.code
+        - repo.pulls
+        - repo.wiki
+        - repo.packages
+        units_map:
+          repo.actions: write
+          repo.code: write
+          repo.ext_issues: read
+          repo.ext_wiki: read
+          repo.issues: write
+          repo.packages: write
+          repo.projects: write
+          repo.pulls: write
+          repo.releases: read
+          repo.wiki: write
+    - name: qa
+      values: |-
+        name: qa
+        includes_all_repositories: true
+        can_create_org_repo: false
+        permission: read
+        units:
+        - repo.issues
+        - repo.ext_issues
+        - repo.releases
+        - repo.ext_wiki
+        - repo.projects
+        - repo.actions
+        - repo.code
+        - repo.pulls
+        - repo.wiki
+        - repo.packages
+        units_map:
+          repo.actions: read
+          repo.code: read
+          repo.ext_issues: read
+          repo.ext_wiki: read
+          repo.issues: write
+          repo.packages: read
+          repo.projects: write
+          repo.pulls: read
+          repo.releases: read
+          repo.wiki: write
+    - name: read
+      values: |-
+        name: read
+        includes_all_repositories: true
+        can_create_org_repo: false
+        permission: read
+        units:
+        - repo.issues
+        - repo.ext_issues
+        - repo.releases
+        - repo.ext_wiki
+        - repo.projects
+        - repo.actions
+        - repo.code
+        - repo.pulls
+        - repo.wiki
+        - repo.packages
+        units_map:
+          repo.actions: read
+          repo.code: read
+          repo.ext_issues: read
+          repo.ext_wiki: read
+          repo.issues: read
+          repo.packages: read
+          repo.projects: read
+          repo.pulls: read
+          repo.releases: read
+          repo.wiki: read

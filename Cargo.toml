@@ -1,6 +1,6 @@
 [package]
 name = "kuberest"
-version = "1.2.0"
+version = "1.3.0"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 default-run = "controller"
@@ -26,7 +26,7 @@ operator = { cmd=[
 ]}
 precommit = { cmd=[
     "cargo update",
-    "cargo clippy --fix --allow-dirty",
+    "cargo clippy --fix --allow-dirty --allow-staged",
     "cargo cmd generate",
     "cargo +nightly fmt"
 ]}
@@ -81,6 +81,7 @@ base64 = "0.22.1"
 rand = "0.8.5"
 argon2 = { version = "0.5.3", features = ["std"] }
 bcrypt = "0.16.0"
+serde_json_path = "0.7.1"
 
 [dev-dependencies]
 assert-json-diff = "2.0.2"

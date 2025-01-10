@@ -1,0 +1,37 @@
+apiVersion: kuberest.solidite.fr/v1
+kind: RestEndPoint
+metadata:
+  name: harbor-mirror-docker
+spec:
+  inputs:
+  - name: admin
+    secretRef:
+      name: harbor-basic
+  client:
+    baseurl: https://harbor.your-company.com/api/v2.0
+    headers:
+      Authorization: '{{ header_basic "admin" (base64_decode input.admin.data.HARBOR_ADMIN_PASSWORD) }}'
+  writes:
+  - name: registries
+    path: registries
+    updateMethod: Put
+    items:
+    - name: mirror
+      readPath: registries?name=docker
+      readJsonQuery: $[0]
+      values: |
+        name: docker
+        url: https://hub.docker.com
+        type: docker-hub
+  - name: projects
+    path: projects
+    updateMethod: Put
+    keyName: project_id
+    items:
+    - name: mirror
+      readPath: projects?name=docker
+      readJsonQuery: $[0]
+      values: |-
+        project_name: docker
+        public: true
+        registry_id: {{ write.registries.mirror.id }}

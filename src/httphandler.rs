@@ -106,9 +106,9 @@ impl RestClient {
     }
 
     pub fn add_header_json_accept(&mut self) -> &mut RestClient {
-        for (key, val) in self.headers.clone() {
+        /*for (key, val) in self.headers.clone() {
             debug!("RestClient.header: {:} {:}", key, val);
-        }
+        }*/
         if self.headers.clone().into_iter().any(|(c, _)| c == *"Accept") {
             self
         } else {

@@ -1,7 +1,7 @@
 use crate::{get_client_name, Error, Error::*, RhaiRes};
 use actix_web::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use reqwest::{Certificate, Client, Response};
+use reqwest::{Certificate, Client, Response, StatusCode};
 use rhai::{Dynamic, Map};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -585,7 +585,7 @@ impl RestClient {
 
     pub fn body_delete(&mut self, path: &str) -> Result<String, Error> {
         let response = self.http_delete(path).map_err(Error::ReqwestError)?;
-        if !response.status().is_success() {
+        if !response.status().is_success() && response.status() != StatusCode::NOT_FOUND {
             let status = response.status();
             let text = tokio::task::block_in_place(|| {
                 Handle::current().block_on(async move { response.text().await })

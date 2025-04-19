@@ -1132,6 +1132,7 @@ impl RestEndPoint {
 
         // Handle each Writes
         let mut target_new: Vec<OwnedRestPoint> = Vec::new();
+        let mut failures: i32 = 0;
         if let Some(writes) = self.spec.writes.clone() {
             for group in writes {
                 let key_name = group
@@ -1377,54 +1378,60 @@ impl RestEndPoint {
                                         .unwrap_or(self.spec.client.teardown.unwrap_or(true)),
                                 ),
                             ));
+                        } else if giveup {
+                            failures += 1;
                         }
                     }
                 }
             }
         }
-        // Delete old owned writes
-        for old in self.owned_target().clone() {
-            if old.teardown
-                && !target_new
-                    .clone()
-                    .into_iter()
-                    .any(|t| t.group == old.group && t.name == old.name)
-            {
-                rest.obj_delete(DeleteMethod::Delete, &old.path, &old.key)
-                    .unwrap_or_else(|e| {
-                        let giveup = if let Error::MethodFailed(_, code, _) = e {
-                            code == 404
-                        } else {
-                            false
-                        };
-                        // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
-                        if !self.spec.client.teardown.unwrap_or(false) && !giveup {
+        // Delete old owned writes if no failures
+        if failures == 0 {
+            for old in self.owned_target().clone() {
+                if old.teardown
+                    && !target_new
+                        .clone()
+                        .into_iter()
+                        .any(|t| t.group == old.group && t.name == old.name)
+                {
+                    rest.obj_delete(DeleteMethod::Delete, &old.path, &old.key)
+                        .unwrap_or_else(|e| {
+                            let giveup = if let Error::MethodFailed(_, code, _) = e {
+                                code == 404
+                            } else {
+                                false
+                            };
+                            // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
+                            if !self.spec.client.teardown.unwrap_or(false) && !giveup {
+                                target_new.push(old.clone());
+                                conditions.push(ApplicationCondition::write_delete_failed(
+                                    format!(
+                                        "Deleting write.{}.{} {e:?}",
+                                        old.group.as_str(),
+                                        old.name.as_str()
+                                    )
+                                    .as_str(),
+                                ));
+                            }
                             target_new.push(old.clone());
-                            conditions.push(ApplicationCondition::write_delete_failed(
-                                format!(
-                                    "Deleting write.{}.{} {e:?}",
-                                    old.group.as_str(),
-                                    old.name.as_str()
-                                )
-                                .as_str(),
-                            ));
-                        }
-                        target_new.push(old.clone());
-                        tokio::task::block_in_place(|| {
-                            Handle::current().block_on(async {
-                                Self::publish_warning(
-                                    &recorder,
-                                    format!("Failed deleting: write.{}.{}", old.group, old.name),
-                                    format!("{e:?}"),
-                                    String::from("deleting"),
-                                )
-                                .await
-                                .unwrap_or(());
-                            })
+                            tokio::task::block_in_place(|| {
+                                Handle::current().block_on(async {
+                                    Self::publish_warning(
+                                        &recorder,
+                                        format!("Failed deleting: write.{}.{}", old.group, old.name),
+                                        format!("{e:?}"),
+                                        String::from("deleting"),
+                                    )
+                                    .await
+                                    .unwrap_or(());
+                                })
+                            });
+                            json!({})
                         });
-                        json!({})
-                    });
+                }
             }
+        } else {
+            warn!("Write failures detected ({}), no cleanup processed.", failures);
         }
         // Verify that all writes went OK
         let cnd = conditions.clone();

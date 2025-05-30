@@ -22,15 +22,11 @@ impl Default for Metrics {
         )
         .unwrap();
         let failures = IntCounterVec::new(
-            opts!(
-                "kuberest_reconciliation_errors_total",
-                "reconciliation errors",
-            ),
+            opts!("kuberest_reconciliation_errors_total", "reconciliation errors",),
             &["instance", "error"],
         )
         .unwrap();
-        let reconciliations =
-            IntCounter::new("kuberest_reconciliations_total", "reconciliations").unwrap();
+        let reconciliations = IntCounter::new("kuberest_reconciliations_total", "reconciliations").unwrap();
         Metrics {
             reconciliations,
             failures,

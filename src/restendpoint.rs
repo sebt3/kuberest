@@ -686,7 +686,7 @@ impl RestEndPoint {
                         }
                     } else {
                         warn!("No spec change, should have awaited change. Will do.");
-                        return Ok(Action::await_change())
+                        return Ok(Action::await_change());
                     }
                 }
             }

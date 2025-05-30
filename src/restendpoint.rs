@@ -679,9 +679,14 @@ impl RestEndPoint {
                     }
                 } else {
                     let next = self.spec.check_frequency.unwrap_or(60 * 60);
-                    if delta < next {
-                        debug!("The spec didnt change, only the status (which this code just did), waiting {} more secs",next-delta);
-                        return Ok(Action::requeue(Duration::from_secs(next - delta)));
+                    if next > 0 {
+                        if delta < next {
+                            debug!("The spec didnt change, only the status (which this code just did), waiting {} more secs",next-delta);
+                            return Ok(Action::requeue(Duration::from_secs(next - delta)));
+                        }
+                    } else {
+                        warn!("No spec change, should have awaited change. Will do.");
+                        return Ok(Action::await_change())
                     }
                 }
             }
@@ -1811,9 +1816,12 @@ impl RestEndPoint {
                 .patch_status(&name, &ps, &new_status)
                 .await
                 .map_err(Error::KubeError)?;
-            Ok(Action::requeue(Duration::from_secs(
-                self.spec.check_frequency.unwrap_or(60 * 60),
-            )))
+            let wait_duration = self.spec.check_frequency.unwrap_or(60 * 60);
+            if wait_duration > 0 {
+                Ok(Action::requeue(Duration::from_secs(wait_duration)))
+            } else {
+                Ok(Action::await_change())
+            }
         }
     }
 

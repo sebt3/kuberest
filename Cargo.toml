@@ -1,6 +1,6 @@
 [package]
 name = "kuberest"
-version = "1.3.0"
+version = "1.3.3"
 authors = ["Sébastien Huss <sebastien.huss@gmail.com>"]
 edition = "2021"
 default-run = "controller"

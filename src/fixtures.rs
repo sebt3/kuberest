@@ -1,10 +1,10 @@
 //! Helper methods only available for tests
 use crate::{
-    Context, Metrics, RestEndPoint, RestEndPointSpec, RestEndPointStatus, Result, RESTPATH_FINALIZER,
+    Context, Metrics, RESTPATH_FINALIZER, RestEndPoint, RestEndPointSpec, RestEndPointStatus, Result,
 };
 use assert_json_diff::assert_json_include;
 use http::{Request, Response};
-use kube::{client::Body, Client, Resource, ResourceExt};
+use kube::{Client, Resource, ResourceExt, client::Body};
 use prometheus::Registry;
 use std::sync::Arc;
 

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use crate::restendpoint::{Metadata, RestEndPoint, RESTPATH_FINALIZER};
-use anyhow::{bail, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use crate::restendpoint::{Metadata, RESTPATH_FINALIZER, RestEndPoint};
+use anyhow::{Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use kube::{
-    api::{Api, DeleteParams, ListParams, ObjectList, Patch, PatchParams, PostParams},
     Client,
+    api::{Api, DeleteParams, ListParams, ObjectList, Patch, PatchParams, PostParams},
 };
 
 pub use k8s_openapi::api::core::v1::Secret;

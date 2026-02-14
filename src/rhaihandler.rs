@@ -1,13 +1,13 @@
 use crate::{
+    Error::{self, *},
+    RhaiRes,
     handlebarshandler::HandleBars,
     hasheshandlers::Argon,
     httphandler::RestClient,
     passwordhandler::Passwords,
     rhai_err,
-    Error::{self, *},
-    RhaiRes,
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rhai::{Dynamic, Engine, ImmutableString, Map, Module, Scope};
 use serde::Deserialize;
 
@@ -118,7 +118,9 @@ impl Script {
             .register_fn("http_delete", RestClient::rhai_delete)
             .register_fn("http_patch", RestClient::rhai_patch)
             .register_fn("http_post", RestClient::rhai_post)
-            .register_fn("http_put", RestClient::rhai_put);
+            .register_fn("http_put", RestClient::rhai_put)
+            .register_fn("post_form", RestClient::rhai_post_form)
+            .register_fn("http_post_form", RestClient::rhai_post_form);
         script
             .engine
             .register_type_with_name::<Argon>("Argon")

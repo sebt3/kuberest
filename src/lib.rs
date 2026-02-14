@@ -82,18 +82,18 @@ mod rhaihandler;
 
 #[macro_export]
 macro_rules! template {
-    ( $( $tmpl:expr, $hbs:expr, $values:expr, $conditions:expr, $recorder:expr ),* ) => {
+    ( $( $tmpl:expr, $hbs:expr, $values:expr, $conditions:expr, $recorder:expr, $obj_ref:expr ),* ) => {
         {   $(
             $hbs.clone().render($tmpl, $values).unwrap_or_else(|e| {
                 $conditions.push(ApplicationCondition::template_failed(&format!("`{}` raised {e:?}",$tmpl)));
                 tokio::task::block_in_place(|| {Handle::current().block_on(async {
-                    $recorder.publish(Event {
+                    $recorder.publish(&Event {
                         type_: EventType::Warning,
                         reason: format!("Failed templating: {}",$tmpl),
                         note: Some(format!("{e:?}")),
                         action: "templating".into(),
                         secondary: None,
-                    }).await.map_err(Error::KubeError).unwrap_or(());
+                    }, $obj_ref).await.map_err(Error::KubeError).unwrap_or(());
                 })});
                 $tmpl.to_string()
             })
@@ -103,21 +103,24 @@ macro_rules! template {
 
 #[macro_export]
 macro_rules! update {
-    ( $list:expr, $type_obj:expr, $output:expr, $my_ns:expr, $my_values:expr, $conditions:expr, $recorder:expr ) => {
+    ( $list:expr, $type_obj:expr, $output:expr, $my_ns:expr, $my_values:expr, $conditions:expr, $recorder:expr, $obj_ref:expr ) => {
         match $list.update(&$output.metadata, $my_values).await {
             Ok(x) => Some(x),
             Err(e) => {
                 $recorder
-                    .publish(Event {
-                        type_: EventType::Warning,
-                        reason: format!(
-                            "Failed to update {}: {}.{}",
-                            $type_obj, $my_ns, $output.metadata.name
-                        ),
-                        note: Some(format!("{e:?}")),
-                        action: "updating".into(),
-                        secondary: None,
-                    })
+                    .publish(
+                        &Event {
+                            type_: EventType::Warning,
+                            reason: format!(
+                                "Failed to update {}: {}.{}",
+                                $type_obj, $my_ns, $output.metadata.name
+                            ),
+                            note: Some(format!("{e:?}")),
+                            action: "updating".into(),
+                            secondary: None,
+                        },
+                        $obj_ref,
+                    )
                     .await
                     .map_err(Error::KubeError)
                     .unwrap();
@@ -132,21 +135,24 @@ macro_rules! update {
 }
 #[macro_export]
 macro_rules! create {
-    ( $list:expr, $type_obj:expr, $own:expr, $output:expr, $my_ns:expr, $my_values:expr, $conditions:expr, $recorder:expr ) => {
+    ( $list:expr, $type_obj:expr, $own:expr, $output:expr, $my_ns:expr, $my_values:expr, $conditions:expr, $recorder:expr, $obj_ref:expr ) => {
         match $list.create($own, &$output.clone().metadata, $my_values).await {
             Ok(x) => Some(x),
             Err(e) => {
                 $recorder
-                    .publish(Event {
-                        type_: EventType::Warning,
-                        reason: format!(
-                            "Failed to create {}: {}.{}",
-                            $type_obj, $my_ns, $output.metadata.name
-                        ),
-                        note: Some(format!("{e:?}")),
-                        action: "updating".into(),
-                        secondary: None,
-                    })
+                    .publish(
+                        &Event {
+                            type_: EventType::Warning,
+                            reason: format!(
+                                "Failed to create {}: {}.{}",
+                                $type_obj, $my_ns, $output.metadata.name
+                            ),
+                            note: Some(format!("{e:?}")),
+                            action: "updating".into(),
+                            secondary: None,
+                        },
+                        $obj_ref,
+                    )
                     .await
                     .map_err(Error::KubeError)
                     .unwrap();

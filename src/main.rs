@@ -1,6 +1,6 @@
 #![allow(unused_imports, unused_variables)]
-use actix_web::{get, middleware, web::Data, App, HttpRequest, HttpResponse, HttpServer, Responder};
-pub use controller::{self, telemetry, State};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, get, middleware, web::Data};
+pub use controller::{self, State, telemetry};
 use prometheus::{Encoder, TextEncoder};
 use std::env;
 

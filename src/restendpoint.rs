@@ -1,25 +1,25 @@
 use crate::{
-    create,
+    Error, Metrics, Result, create,
     handlebarshandler::HandleBars,
     httphandler::{CreateMethod, DeleteMethod, ReadMethod, RestClient, UpdateMethod},
     k8shandlers::{ConfigMapHandler, SecretHandler},
     passwordhandler::Passwords,
     rhaihandler::Script,
-    telemetry, template, update, Error, Metrics, Result,
+    telemetry, template, update,
 };
 use chrono::{self, DateTime, Utc};
 use futures::StreamExt;
-use k8s_openapi::api::core::v1::Namespace;
+use k8s_openapi::api::core::v1::{Namespace, ObjectReference};
 use kube::{
+    CustomResource, Resource,
     api::{Api, ListParams, Patch, PatchParams, ResourceExt},
     client::Client,
     runtime::{
         controller::{Action, Controller},
         events::{Event, EventType, Recorder, Reporter},
-        finalizer::{finalizer, Event as Finalizer},
+        finalizer::{Event as Finalizer, finalizer},
         watcher::Config,
     },
-    CustomResource, Resource,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -567,17 +567,26 @@ impl RestEndPoint {
         }
     }
 
-    async fn publish(recorder: &Recorder, reason: String, note_p: String, action: String) -> Result<()> {
+    async fn publish(
+        recorder: &Recorder,
+        obj_ref: &ObjectReference,
+        reason: String,
+        note_p: String,
+        action: String,
+    ) -> Result<()> {
         let mut note = note_p;
         note.truncate(1023);
         match recorder
-            .publish(Event {
-                type_: EventType::Normal,
-                reason,
-                note: Some(note),
-                action,
-                secondary: None,
-            })
+            .publish(
+                &Event {
+                    type_: EventType::Normal,
+                    reason,
+                    note: Some(note),
+                    action,
+                    secondary: None,
+                },
+                obj_ref,
+            )
             .await
         {
             Ok(_) => Ok(()),
@@ -600,6 +609,7 @@ impl RestEndPoint {
 
     async fn publish_warning(
         recorder: &Recorder,
+        obj_ref: &ObjectReference,
         reason: String,
         note_p: String,
         action: String,
@@ -607,13 +617,16 @@ impl RestEndPoint {
         let mut note = note_p;
         note.truncate(1023);
         match recorder
-            .publish(Event {
-                type_: EventType::Warning,
-                reason,
-                note: Some(note),
-                action,
-                secondary: None,
-            })
+            .publish(
+                &Event {
+                    type_: EventType::Warning,
+                    reason,
+                    note: Some(note),
+                    action,
+                    secondary: None,
+                },
+                obj_ref,
+            )
             .await
         {
             Ok(_) => Ok(()),
@@ -641,18 +654,18 @@ impl RestEndPoint {
         let label_key =
             std::env::var("TENANT_LABEL").unwrap_or_else(|_| "kuberest.solidite.fr/tenant".to_string());
         let res = vec![my_ns];
-        if let Some(labels) = my_ns_meta.metadata.labels.clone() {
-            if labels.clone().keys().any(|k| k == &label_key) {
-                let tenant_name = &labels[&label_key];
-                let mut lp = ListParams::default();
-                lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
-                let my_nss = ns_api.list_metadata(&lp).await.map_err(Error::KubeError)?;
-                return Ok(my_nss
-                    .items
-                    .into_iter()
-                    .map(|n| n.metadata.name.unwrap())
-                    .collect());
-            }
+        if let Some(labels) = my_ns_meta.metadata.labels.clone()
+            && labels.clone().keys().any(|k| k == &label_key)
+        {
+            let tenant_name = &labels[&label_key];
+            let mut lp = ListParams::default();
+            lp = lp.labels(format!("{}=={}", label_key, tenant_name).as_str());
+            let my_nss = ns_api.list_metadata(&lp).await.map_err(Error::KubeError)?;
+            return Ok(my_nss
+                .items
+                .into_iter()
+                .map(|n| n.metadata.name.unwrap())
+                .collect());
         }
         Ok(res)
     }
@@ -674,14 +687,20 @@ impl RestEndPoint {
                 {
                     let next = self.spec.retry_frequency.unwrap_or(5 * 60);
                     if delta < next {
-                        debug!("The spec didnt change, only the status (which this code just did), waiting {} more secs",next-delta);
+                        debug!(
+                            "The spec didnt change, only the status (which this code just did), waiting {} more secs",
+                            next - delta
+                        );
                         return Ok(Action::requeue(Duration::from_secs(next - delta)));
                     }
                 } else {
                     let next = self.spec.check_frequency.unwrap_or(60 * 60);
                     if next > 0 {
                         if delta < next {
-                            debug!("The spec didnt change, only the status (which this code just did), waiting {} more secs",next-delta);
+                            debug!(
+                                "The spec didnt change, only the status (which this code just did), waiting {} more secs",
+                                next - delta
+                            );
                             return Ok(Action::requeue(Duration::from_secs(next - delta)));
                         }
                     } else {
@@ -693,7 +712,8 @@ impl RestEndPoint {
         }
 
         let client = ctx.client.clone();
-        let recorder = ctx.diagnostics.read().await.recorder(client.clone(), self);
+        let recorder = ctx.diagnostics.read().await.recorder(client.clone());
+        let obj_ref = self.object_ref(&());
         let ns = self.namespace().unwrap();
         let name = self.name_any();
         let restendpoints: Api<RestEndPoint> = Api::namespaced(client.clone(), &ns);
@@ -732,7 +752,7 @@ impl RestEndPoint {
                             if allowed.contains(&o_ns) {
                                 o_ns
                             } else {
-                                Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
+                                Self::publish_warning(&recorder, &obj_ref, String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                 ns.clone()
                             }
                         } else {
@@ -753,6 +773,7 @@ impl RestEndPoint {
                     } else if secret.optional.unwrap_or(false) {
                         Self::publish(
                             &recorder,
+                            &obj_ref,
                             String::from("IgnoredInput"),
                             format!("Ignoring not found secret for Input '{}'", input.name),
                             String::from("readingInput"),
@@ -766,6 +787,7 @@ impl RestEndPoint {
                     } else {
                         Self::publish(
                             &recorder,
+                            &obj_ref,
                             String::from("MissingSecret"),
                             format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
                             String::from("readingInput"),
@@ -782,7 +804,7 @@ impl RestEndPoint {
                             if allowed.contains(&o_ns) {
                                 o_ns
                             } else {
-                                Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
+                                Self::publish_warning(&recorder, &obj_ref, String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                 ns.clone()
                             }
                         } else {
@@ -804,6 +826,7 @@ impl RestEndPoint {
                     } else if cfgmap.optional.unwrap_or(false) {
                         Self::publish(
                             &recorder,
+                            &obj_ref,
                             String::from("IgnoredInput"),
                             format!("Ignoring not found ConfigMap for Input '{}'", input.name),
                             String::from("readingInput"),
@@ -817,6 +840,7 @@ impl RestEndPoint {
                     } else {
                         Self::publish(
                             &recorder,
+                            &obj_ref,
                             String::from("MissingConfigMap"),
                             format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
                             String::from("readingInput"),
@@ -828,8 +852,14 @@ impl RestEndPoint {
                         )));
                     }
                 } else if let Some(render) = input.handle_bars_render {
-                    values["input"][input.name] =
-                        json!(template!(render.as_str(), hbs, &values, conditions, recorder));
+                    values["input"][input.name] = json!(template!(
+                        render.as_str(),
+                        hbs,
+                        &values,
+                        conditions,
+                        recorder,
+                        &obj_ref
+                    ));
                 } else if let Some(password_def) = input.password_generator {
                     values["input"][input.name] = json!(Passwords::new().generate(
                         password_def.length.unwrap_or(32),
@@ -840,6 +870,7 @@ impl RestEndPoint {
                 } else {
                     Self::publish_warning(
                         &recorder,
+                        &obj_ref,
                         String::from("EmptyInput"),
                         format!("Input '{}' have no source", input.name),
                         String::from("fail"),
@@ -875,6 +906,7 @@ impl RestEndPoint {
             let msg = "Some input failed";
             Self::publish_warning(
                 &recorder,
+                &obj_ref,
                 String::from(msg),
                 format!("Found {} error(s) while handling input", conditions.len()),
                 String::from("fail"),
@@ -919,6 +951,7 @@ impl RestEndPoint {
                 let msg = "Init-script failed";
                 Self::publish_warning(
                     &recorder,
+                    &obj_ref,
                     String::from(msg),
                     format!("Found {} error(s) running the init-script", conditions.len()),
                     String::from("fail"),
@@ -949,19 +982,27 @@ impl RestEndPoint {
             hbs,
             &values,
             conditions,
-            recorder
+            recorder,
+            &obj_ref
         ));
         if let Some(headers) = self.spec.client.headers.clone() {
             for (key, value) in headers {
                 rest.add_header(
-                    &template!(key.as_str(), hbs, &values, conditions, recorder),
-                    &template!(value.as_str(), hbs, &values, conditions, recorder),
+                    &template!(key.as_str(), hbs, &values, conditions, recorder, &obj_ref),
+                    &template!(value.as_str(), hbs, &values, conditions, recorder, &obj_ref),
                 );
             }
         }
         rest.add_header_json();
         if let Some(ca) = self.spec.client.server_ca.clone() {
-            rest.set_server_ca(&template!(&ca.as_str(), hbs, &values, conditions, recorder));
+            rest.set_server_ca(&template!(
+                &ca.as_str(),
+                hbs,
+                &values,
+                conditions,
+                recorder,
+                &obj_ref
+            ));
         }
         if self.spec.client.client_cert.is_some() && self.spec.client.client_key.is_some() {
             rest.set_mtls(
@@ -970,14 +1011,16 @@ impl RestEndPoint {
                     hbs,
                     &values,
                     conditions,
-                    recorder
+                    recorder,
+                    &obj_ref
                 ),
                 &template!(
                     &self.spec.client.client_key.clone().unwrap().as_str(),
                     hbs,
                     &values,
                     conditions,
-                    recorder
+                    recorder,
+                    &obj_ref
                 ),
             );
         }
@@ -990,6 +1033,7 @@ impl RestEndPoint {
             let msg = "Client setup failed";
             Self::publish_warning(
                 &recorder,
+                &obj_ref,
                 String::from(msg),
                 format!("Found {} error(s) while setting up the client", conditions.len()),
                 String::from("fail"),
@@ -1027,6 +1071,7 @@ impl RestEndPoint {
                 let msg = "Pre-script failed";
                 Self::publish_warning(
                     &recorder,
+                    &obj_ref,
                     String::from(msg),
                     format!("Found {} error(s) running the pre-script", conditions.len()),
                     String::from("fail"),
@@ -1055,7 +1100,7 @@ impl RestEndPoint {
         if let Some(reads) = self.spec.reads.clone() {
             for group in reads {
                 values["read"][group.name.clone()] = serde_json::json!({});
-                let path = template!(group.path.as_str(), hbs, &values, conditions, recorder);
+                let path = template!(group.path.as_str(), hbs, &values, conditions, recorder, &obj_ref);
                 for read in group.items {
                     let result =
                         rest.clone()
@@ -1064,7 +1109,7 @@ impl RestEndPoint {
                                     self.spec.client.read_method.clone().unwrap_or(ReadMethod::Get),
                                 ),
                                 path.as_str(),
-                                &template!(read.key.as_str(), hbs, &values, conditions, recorder),
+                                &template!(read.key.as_str(), hbs, &values, conditions, recorder, &obj_ref),
                             )
                             .unwrap_or_else(|e| {
                                 if read.optional.unwrap_or(false) {
@@ -1106,6 +1151,7 @@ impl RestEndPoint {
             let msg = "Some read have failed";
             Self::publish_warning(
                 &recorder,
+                &obj_ref,
                 String::from(msg),
                 format!("Found {} error(s) while reading values", conditions.len()),
                 String::from("fail"),
@@ -1144,11 +1190,12 @@ impl RestEndPoint {
                     .key_name
                     .unwrap_or(self.spec.client.key_name.clone().unwrap_or("id".to_string()));
                 values["write"][group.name.clone()] = serde_json::json!({});
-                let path = template!(group.path.as_str(), hbs, &values, conditions, recorder);
+                let path = template!(group.path.as_str(), hbs, &values, conditions, recorder, &obj_ref);
                 for item in group.items {
                     let cur_len = conditions.len();
                     let vals = serde_yaml::from_str(
-                        template!(item.values.as_str(), hbs, &values, conditions, recorder).as_str(),
+                        template!(item.values.as_str(), hbs, &values, conditions, recorder, &obj_ref)
+                            .as_str(),
                     )
                     .unwrap_or_else(|e| {
                         conditions.push(ApplicationCondition::write_failed(&format!(
@@ -1423,6 +1470,7 @@ impl RestEndPoint {
                                 Handle::current().block_on(async {
                                     Self::publish_warning(
                                         &recorder,
+                                        &obj_ref,
                                         format!("Failed deleting: write.{}.{}", old.group, old.name),
                                         format!("{e:?}"),
                                         String::from("deleting"),
@@ -1448,6 +1496,7 @@ impl RestEndPoint {
             let msg = "Some writes have failed";
             Self::publish_warning(
                 &recorder,
+                &obj_ref,
                 String::from(msg),
                 format!("Found {} error(s) while writing values", conditions.len()),
                 String::from("fail"),
@@ -1486,6 +1535,7 @@ impl RestEndPoint {
                 let msg = "Post-script failed";
                 Self::publish_warning(
                     &recorder,
+                    &obj_ref,
                     String::from(msg),
                     format!("Found {} error(s) during post-script", conditions.len()),
                     String::from("fail"),
@@ -1517,7 +1567,7 @@ impl RestEndPoint {
                         if allowed.contains(&o_ns) {
                             o_ns
                         } else {
-                            Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",output.metadata.name), String::from("readingOutput")).await?;
+                            Self::publish_warning(&recorder, &obj_ref, String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",output.metadata.name), String::from("readingOutput")).await?;
                             ns.clone()
                         }
                     } else {
@@ -1531,8 +1581,8 @@ impl RestEndPoint {
                 let mut my_values: HashMap<String, String> = HashMap::new();
                 for (key, val) in output.clone().data {
                     my_values.insert(
-                        template!(key.as_str(), hbs, &values, conditions, recorder),
-                        template!(val.as_str(), hbs, &values, conditions, recorder),
+                        template!(key.as_str(), hbs, &values, conditions, recorder, &obj_ref),
+                        template!(val.as_str(), hbs, &values, conditions, recorder, &obj_ref),
                     );
                 }
                 if output.kind == Kind::Secret {
@@ -1553,14 +1603,16 @@ impl RestEndPoint {
                         if secrets.have_uid(&myself.name, &myself.uid).await {
                             if !secrets.have_with_data(&myself.name, &my_values).await {
                                 let _ = update!(
-                                    secrets, "Secret", output, my_ns, &my_values, conditions, recorder
+                                    secrets, "Secret", output, my_ns, &my_values, conditions, recorder,
+                                    &obj_ref
                                 );
                             }
                             owned_new.push(myself);
                         } else if secrets.have(&myself.name).await {
                             if !secrets.have_with_data(&myself.name, &my_values).await {
                                 let _ = update!(
-                                    secrets, "Secret", output, my_ns, &my_values, conditions, recorder
+                                    secrets, "Secret", output, my_ns, &my_values, conditions, recorder,
+                                    &obj_ref
                                 );
                             }
                             if output.teardown.unwrap_or(true) {
@@ -1578,21 +1630,22 @@ impl RestEndPoint {
                                 None
                             };
                             if let Some(sec) = create!(
-                                secrets, "Secret", own, output, my_ns, &my_values, conditions, recorder
-                            ) {
-                                if output.teardown.unwrap_or(true) {
-                                    owned_new.push(OwnedObjects::secret(
-                                        sec.metadata.name.unwrap().as_str(),
-                                        sec.metadata.namespace.unwrap().as_str(),
-                                        sec.metadata.uid.unwrap().as_str(),
-                                    ));
-                                }
+                                secrets, "Secret", own, output, my_ns, &my_values, conditions, recorder,
+                                &obj_ref
+                            ) && output.teardown.unwrap_or(true)
+                            {
+                                owned_new.push(OwnedObjects::secret(
+                                    sec.metadata.name.unwrap().as_str(),
+                                    sec.metadata.namespace.unwrap().as_str(),
+                                    sec.metadata.uid.unwrap().as_str(),
+                                ));
                             }
                         }
                     } else if secrets.have(&output.metadata.name).await {
                         if !secrets.have_with_data(&output.metadata.name, &my_values).await {
-                            let _ =
-                                update!(secrets, "Secret", output, my_ns, &my_values, conditions, recorder);
+                            let _ = update!(
+                                secrets, "Secret", output, my_ns, &my_values, conditions, recorder, &obj_ref
+                            );
                         }
                         if output.teardown.unwrap_or(true) {
                             conditions.push(ApplicationCondition::output_exist(&format!(
@@ -1616,15 +1669,15 @@ impl RestEndPoint {
                             my_ns,
                             &my_values,
                             conditions,
-                            recorder
-                        ) {
-                            if output.teardown.unwrap_or(true) {
-                                owned_new.push(OwnedObjects::secret(
-                                    sec.metadata.name.unwrap().as_str(),
-                                    sec.metadata.namespace.unwrap().as_str(),
-                                    sec.metadata.uid.unwrap().as_str(),
-                                ));
-                            }
+                            recorder,
+                            &obj_ref
+                        ) && output.teardown.unwrap_or(true)
+                        {
+                            owned_new.push(OwnedObjects::secret(
+                                sec.metadata.name.unwrap().as_str(),
+                                sec.metadata.namespace.unwrap().as_str(),
+                                sec.metadata.uid.unwrap().as_str(),
+                            ));
                         }
                     }
                 } else if output.kind == Kind::ConfigMap {
@@ -1651,7 +1704,8 @@ impl RestEndPoint {
                                     my_ns,
                                     &my_values,
                                     conditions,
-                                    recorder
+                                    recorder,
+                                    &obj_ref
                                 );
                             }
                             owned_new.push(myself);
@@ -1664,7 +1718,8 @@ impl RestEndPoint {
                                     my_ns,
                                     &my_values,
                                     conditions,
-                                    recorder
+                                    recorder,
+                                    &obj_ref
                                 );
                             }
                             if output.teardown.unwrap_or(true) {
@@ -1689,21 +1744,29 @@ impl RestEndPoint {
                                 my_ns,
                                 &my_values,
                                 conditions,
-                                recorder
-                            ) {
-                                if output.teardown.unwrap_or(true) {
-                                    owned_new.push(OwnedObjects::configmap(
-                                        sec.metadata.name.unwrap().as_str(),
-                                        sec.metadata.namespace.unwrap().as_str(),
-                                        sec.metadata.uid.unwrap().as_str(),
-                                    ));
-                                }
+                                recorder,
+                                &obj_ref
+                            ) && output.teardown.unwrap_or(true)
+                            {
+                                owned_new.push(OwnedObjects::configmap(
+                                    sec.metadata.name.unwrap().as_str(),
+                                    sec.metadata.namespace.unwrap().as_str(),
+                                    sec.metadata.uid.unwrap().as_str(),
+                                ));
                             }
                         }
                     } else if cms.have(&output.metadata.name).await {
                         if !cms.have_with_data(&output.metadata.name, &my_values).await {
-                            let _ =
-                                update!(cms, "ConfigMap", output, my_ns, &my_values, conditions, recorder);
+                            let _ = update!(
+                                cms,
+                                "ConfigMap",
+                                output,
+                                my_ns,
+                                &my_values,
+                                conditions,
+                                recorder,
+                                &obj_ref
+                            );
                         }
                         if output.teardown.unwrap_or(true) {
                             conditions.push(ApplicationCondition::output_exist(&format!(
@@ -1727,15 +1790,15 @@ impl RestEndPoint {
                             my_ns,
                             &my_values,
                             conditions,
-                            recorder
-                        ) {
-                            if output.teardown.unwrap_or(true) {
-                                owned_new.push(OwnedObjects::configmap(
-                                    sec.metadata.name.unwrap().as_str(),
-                                    sec.metadata.namespace.unwrap().as_str(),
-                                    sec.metadata.uid.unwrap().as_str(),
-                                ));
-                            }
+                            recorder,
+                            &obj_ref
+                        ) && output.teardown.unwrap_or(true)
+                        {
+                            owned_new.push(OwnedObjects::configmap(
+                                sec.metadata.name.unwrap().as_str(),
+                                sec.metadata.namespace.unwrap().as_str(),
+                                sec.metadata.uid.unwrap().as_str(),
+                            ));
                         }
                     }
                 }
@@ -1784,6 +1847,7 @@ impl RestEndPoint {
             let msg = "Some output have failed";
             Self::publish_warning(
                 &recorder,
+                &obj_ref,
                 String::from(msg),
                 format!("Found {} error(s) while creating outputs", conditions.len()),
                 String::from("fail"),
@@ -1830,7 +1894,8 @@ impl RestEndPoint {
         let client = ctx.client.clone();
         ctx.diagnostics.write().await.last_event = Utc::now();
         let reporter = ctx.diagnostics.read().await.reporter.clone();
-        let recorder = Recorder::new(client.clone(), reporter, self.object_ref(&()));
+        let recorder = Recorder::new(client.clone(), reporter);
+        let obj_ref = self.object_ref(&());
         let ns = self.namespace().unwrap();
         let name = self.name_any();
         let restendpoints: Api<RestEndPoint> = Api::namespaced(client.clone(), &ns);
@@ -1881,7 +1946,7 @@ impl RestEndPoint {
                                 if allowed.contains(&o_ns) {
                                     o_ns
                                 } else {
-                                    Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
+                                    Self::publish_warning(&recorder, &obj_ref, String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                     ns.clone()
                                 }
                             } else {
@@ -1902,6 +1967,7 @@ impl RestEndPoint {
                         } else if secret.optional.unwrap_or(false) {
                             Self::publish(
                                 &recorder,
+                                &obj_ref,
                                 String::from("IgnoredInput"),
                                 format!("Ignoring not found secret for Input '{}'", input.name),
                                 String::from("readingInput"),
@@ -1915,6 +1981,7 @@ impl RestEndPoint {
                         } else {
                             Self::publish(
                                 &recorder,
+                                &obj_ref,
                                 String::from("MissingSecret"),
                                 format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
                                 String::from("readingInput"),
@@ -1931,7 +1998,7 @@ impl RestEndPoint {
                                 if allowed.contains(&o_ns) {
                                     o_ns
                                 } else {
-                                    Self::publish_warning(&recorder,String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
+                                    Self::publish_warning(&recorder, &obj_ref, String::from("IgnoredNamespace"), format!("Ignoring namespace from Input '{}' as the operator run in multi-tenant mode",input.name), String::from("readingInput")).await?;
                                     ns.clone()
                                 }
                             } else {
@@ -1953,6 +2020,7 @@ impl RestEndPoint {
                         } else if cfgmap.optional.unwrap_or(false) {
                             Self::publish(
                                 &recorder,
+                                &obj_ref,
                                 String::from("IgnoredInput"),
                                 format!("Ignoring not found ConfigMap for Input '{}'", input.name),
                                 String::from("readingInput"),
@@ -1966,6 +2034,7 @@ impl RestEndPoint {
                         } else {
                             Self::publish(
                                 &recorder,
+                                &obj_ref,
                                 String::from("MissingConfigMap"),
                                 format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
                                 String::from("readingInput"),
@@ -1977,8 +2046,14 @@ impl RestEndPoint {
                             )));
                         }
                     } else if let Some(render) = input.handle_bars_render {
-                        values["input"][input.name] =
-                            json!(template!(render.as_str(), hbs, &values, conditions, recorder));
+                        values["input"][input.name] = json!(template!(
+                            render.as_str(),
+                            hbs,
+                            &values,
+                            conditions,
+                            recorder,
+                            &obj_ref
+                        ));
                     } else if let Some(password_def) = input.password_generator {
                         values["input"][input.name] = json!(Passwords::new().generate(
                             password_def.length.unwrap_or(32),
@@ -1989,6 +2064,7 @@ impl RestEndPoint {
                     } else {
                         Self::publish_warning(
                             &recorder,
+                            &obj_ref,
                             String::from("EmptyInput"),
                             format!("Input '{}' have no source", input.name),
                             String::from("fail"),
@@ -2034,6 +2110,7 @@ impl RestEndPoint {
                     let msg = "Init-script failed";
                     Self::publish_warning(
                         &recorder,
+                        &obj_ref,
                         String::from(msg),
                         format!("Found {} error(s) running the init-script", conditions.len()),
                         String::from("fail"),
@@ -2065,20 +2142,28 @@ impl RestEndPoint {
             hbs,
             &values,
             conditions,
-            recorder
+            recorder,
+            &obj_ref
         ));
         if do_prepare_client {
             if let Some(headers) = self.spec.client.headers.clone() {
                 for (key, value) in headers {
                     rest.add_header(
-                        &template!(key.as_str(), hbs, &values, conditions, recorder),
-                        &template!(value.as_str(), hbs, &values, conditions, recorder),
+                        &template!(key.as_str(), hbs, &values, conditions, recorder, &obj_ref),
+                        &template!(value.as_str(), hbs, &values, conditions, recorder, &obj_ref),
                     );
                 }
             }
             rest.add_header_json();
             if let Some(ca) = self.spec.client.server_ca.clone() {
-                rest.set_server_ca(&template!(&ca.as_str(), hbs, &values, conditions, recorder));
+                rest.set_server_ca(&template!(
+                    &ca.as_str(),
+                    hbs,
+                    &values,
+                    conditions,
+                    recorder,
+                    &obj_ref
+                ));
             }
             if self.spec.client.client_cert.is_some() && self.spec.client.client_key.is_some() {
                 rest.set_mtls(
@@ -2087,14 +2172,16 @@ impl RestEndPoint {
                         hbs,
                         &values,
                         conditions,
-                        recorder
+                        recorder,
+                        &obj_ref
                     ),
                     &template!(
                         &self.spec.client.client_key.clone().unwrap().as_str(),
                         hbs,
                         &values,
                         conditions,
-                        recorder
+                        recorder,
+                        &obj_ref
                     ),
                 );
             }
@@ -2120,6 +2207,7 @@ impl RestEndPoint {
                 let msg = "Teardown failed";
                 Self::publish_warning(
                     &recorder,
+                    &obj_ref,
                     String::from(msg),
                     format!("Found {} error(s) during teardown", conditions.len()),
                     String::from("fail"),
@@ -2169,6 +2257,7 @@ impl RestEndPoint {
                                 Handle::current().block_on(async {
                                     Self::publish_warning(
                                         &recorder,
+                                        &obj_ref,
                                         format!("Failed deleting: write.{}.{}", obj.group, obj.name),
                                         format!("{e:?}"),
                                         String::from("deleting"),
@@ -2222,6 +2311,7 @@ impl RestEndPoint {
             let msg = "Some teardown failed";
             Self::publish_warning(
                 &recorder,
+                &obj_ref,
                 String::from(msg),
                 format!("Found {} error(s) during teardown", conditions.len()),
                 String::from("fail"),
@@ -2268,8 +2358,8 @@ impl Default for Diagnostics {
     }
 }
 impl Diagnostics {
-    fn recorder(&self, client: Client, restendpoint: &RestEndPoint) -> Recorder {
-        Recorder::new(client, self.reporter.clone(), restendpoint.object_ref(&()))
+    fn recorder(&self, client: Client) -> Recorder {
+        Recorder::new(client, self.reporter.clone())
     }
 }
 
@@ -2324,8 +2414,8 @@ pub async fn run(state: State) {
 // Mock tests relying on fixtures.rs and its primitive apiserver mocks
 #[cfg(test)]
 mod test {
-    use super::{/* error_policy, */ reconcile, Context, RestEndPoint};
-    use crate::fixtures::{timeout_after_1s, Scenario};
+    use super::{Context, RestEndPoint, /* error_policy, */ reconcile};
+    use crate::fixtures::{Scenario, timeout_after_1s};
     use std::sync::Arc;
 
     #[tokio::test]

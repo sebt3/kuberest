@@ -1,10 +1,10 @@
 use crate::{
+    Error, Result, RhaiRes,
     hasheshandlers::{self, Argon},
     passwordhandler::Passwords,
-    Error, Result, RhaiRes,
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use handlebars::{handlebars_helper, Handlebars};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use handlebars::{Handlebars, handlebars_helper};
 use handlebars_misc_helpers::new_hbs;
 pub use serde_json::Value;
 use tracing::*;

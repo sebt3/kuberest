@@ -1,9 +1,9 @@
-use crate::{rhai_err, Error, Result, RhaiRes};
+use crate::{Error, Result, RhaiRes, rhai_err};
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
+    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
-use bcrypt::{hash, DEFAULT_COST};
+use bcrypt::{DEFAULT_COST, hash};
 
 #[derive(Clone, Debug)]
 pub struct Argon {

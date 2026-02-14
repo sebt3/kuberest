@@ -1,11 +1,11 @@
-use crate::{get_client_name, Error, Error::*, RhaiRes};
+use crate::{Error, Error::*, RhaiRes, get_client_name};
 use actix_web::Result;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Certificate, Client, Response, StatusCode};
 use rhai::{Dynamic, Map};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tracing::*;
 
@@ -537,6 +537,67 @@ impl RestClient {
         };
         let mut ret = Map::new();
         match self.http_post(path.as_str(), &body) {
+            Ok(result) => {
+                ret.insert(
+                    "code".to_string().into(),
+                    Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
+                );
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let headers = result
+                            .headers()
+                            .into_iter()
+                            .map(|(key, val)| {
+                                (
+                                    key.as_str().to_string(),
+                                    val.to_str().unwrap_or_default().to_string(),
+                                )
+                            })
+                            .collect::<Vec<(String, String)>>();
+                        let text = result.text().await.unwrap();
+                        ret.insert(
+                            "json".to_string().into(),
+                            serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                        );
+                        ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
+                        ret.insert("body".to_string().into(), Dynamic::from(text));
+                        Ok(ret)
+                    })
+                })
+            }
+            Err(e) => Err(format!("{e}").into()),
+        }
+    }
+
+    pub fn http_post_form(
+        &mut self,
+        path: &str,
+        params: &[(String, String)],
+    ) -> Result<Response, reqwest::Error> {
+        debug!("http_post_form '{}' ", format!("{}/{}", self.baseurl, path));
+        match self.get_client() {
+            Ok(client) => {
+                let mut req = client.post(format!("{}/{}", self.baseurl, path)).form(params);
+                for (key, val) in self.headers.clone() {
+                    if key.as_str() == "Content-Type" {
+                        req = req.header("Content-Type", "application/x-www-form-urlencoded");
+                    } else {
+                        req = req.header(key.to_string(), val.to_string());
+                    }
+                }
+                tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn rhai_post_form(&mut self, path: String, val: Map) -> RhaiRes<Map> {
+        let params: Vec<(String, String)> = val
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let mut ret = Map::new();
+        match self.http_post_form(path.as_str(), &params) {
             Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),

@@ -18,6 +18,7 @@ pub enum ReadMethod {
 pub enum CreateMethod {
     #[default]
     Post,
+    Put,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
@@ -26,6 +27,7 @@ pub enum UpdateMethod {
     Patch,
     Put,
     Post,
+    None
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
@@ -724,6 +726,8 @@ impl RestClient {
     pub fn obj_create(&mut self, method: CreateMethod, path: &str, input: &Value) -> Result<Value, Error> {
         if method == CreateMethod::Post {
             self.json_post(path, input)
+        } else if method == CreateMethod::Put {
+            self.json_put(path, input)
         } else {
             Err(UnsupportedMethod)
         }
@@ -747,6 +751,8 @@ impl RestClient {
             self.json_put(&full_path, input)
         } else if method == UpdateMethod::Post {
             self.json_post(&full_path, input)
+        } else if method == UpdateMethod::None {
+            Ok(input.clone())
         } else {
             Err(UnsupportedMethod)
         }

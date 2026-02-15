@@ -27,7 +27,7 @@ pub enum UpdateMethod {
     Patch,
     Put,
     Post,
-    None
+    None,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]

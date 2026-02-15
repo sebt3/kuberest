@@ -579,9 +579,7 @@ impl RestClient {
             Ok(client) => {
                 let mut req = client.post(format!("{}/{}", self.baseurl, path)).form(params);
                 for (key, val) in self.headers.clone() {
-                    if key.as_str() == "Content-Type" {
-                        req = req.header("Content-Type", "application/x-www-form-urlencoded");
-                    } else {
+                    if key.as_str() != "Content-Type" {
                         req = req.header(key.to_string(), val.to_string());
                     }
                 }

@@ -1522,12 +1522,12 @@ impl RestEndPoint {
 
         // Run the post script
         if let Some(script) = self.spec.post.clone() {
-            let cnd = conditions.clone();
             values["post"] = rhai.eval(&script).unwrap_or_else(|e| {
                 conditions.push(ApplicationCondition::post_script_failed(&format!("{e:?}")));
                 json!({})
             });
             // Validate that post-script went Ok
+            let cnd = conditions.clone();
             if cnd.iter().any(|c| {
                 c.condition_type != ConditionsType::InputMissing
                     && c.condition_type != ConditionsType::ReadMissing

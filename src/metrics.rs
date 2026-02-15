@@ -46,7 +46,7 @@ impl Metrics {
 
     pub fn reconcile_failure(&self, doc: &RestEndPoint, e: &Error) {
         self.failures
-            .with_label_values(&[doc.name_any().as_ref(), e.metric_label().as_ref()])
+            .with_label_values(&[doc.name_any().as_str(), e.metric_label().as_str()])
             .inc()
     }
 
@@ -71,6 +71,6 @@ impl Drop for ReconcileMeasurer {
     fn drop(&mut self) {
         #[allow(clippy::cast_precision_loss)]
         let duration = self.start.elapsed().as_millis() as f64 / 1000.0;
-        self.metric.with_label_values(&[]).observe(duration);
+        self.metric.with_label_values::<&str>(&[]).observe(duration);
     }
 }

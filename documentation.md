@@ -161,6 +161,7 @@ spec:
     keyName: id
     teardown: true
     updateMethod: Put
+    childrenNoSubKey: false
 ```
 
 | key | default | description |
@@ -168,8 +169,9 @@ spec:
 |keyName  | id | the key in the returned object that identify the object
 |teardown | true | Should the created objects (writes section) be deleted when then `RestEndpoint` is deleted
 |updateMethod | `Put` | Updating the objects with which HTTP primitive. Available values: `Put`, `Patch` and `Post`.
+|childrenNoSubKey | false | If true, updates and deletes use the **same path as create** and pass the primary key inside the request body instead of appending it to the URL. Useful for APIs that do not follow the `{collection}/{id}` pattern.
 
-All theses 3 keys can be overwritten per "write group" if needed.
+All theses 4 keys can be overwritten per "write group" if needed.
 
 ### Defines `read` from HTTP `Get`
 
@@ -253,6 +255,7 @@ spec:
     keyName: id
     teardown: true
     updateMethod: Put
+    childrenNoSubKey: false
 ```
 
 | key | default | description |
@@ -260,6 +263,32 @@ spec:
 |keyName  | id | the key in the returned object that identify the object
 |teardown | true | Should the created objects (writes section) be deleted when then `RestEndpoint` is deleted
 |updateMethod | `Put` | Updating the objects with which HTTP primitive. Available values: `Put`, `Patch` and `Post`.
+|childrenNoSubKey | false | If true, updates and deletes use the **same path as create** and pass the primary key inside the request body instead of appending it to the URL. Overrides the client-level setting.
+
+#### Using `childrenNoSubKey` for non-REST-compliant APIs
+
+Some APIs do not follow the standard `{collection}/{id}` URL pattern. Instead, every operation (create, update, delete) targets the same endpoint and the object identifier is passed in the request body.
+
+For example, if your API expects:
+- **Create**: `POST /items` with `{name: "foo"}`
+- **Update**: `PUT /items` with `{id: 42, name: "foo"}` *(not `PUT /items/42`)*
+- **Delete**: `DELETE /items` with `{id: 42}` *(not `DELETE /items/42`)*
+
+Then the following configuration handles it:
+```yaml
+spec:
+  writes:
+  - name: mygroup
+    path: items
+    childrenNoSubKey: true
+    items:
+    - name: myobject
+      values: |-
+        name: foo
+```
+With `childrenNoSubKey: true`, kuberest will:
+- On **update**: call `PUT /items` with `{id: <stored_key>, name: "foo"}` (key merged into payload)
+- On **delete**: call `DELETE /items` with `{id: <stored_key>}` (key as payload, same path as create)
 
 ## Saving the results with outputs
 
@@ -403,8 +432,10 @@ From rhai you have a complete access to the REST client used in kuberest using t
 | head  | path(string) | object | do an HTTP HEAD on `path` | `let res = client.head("projects");` |
 | get  | path(string) | object | do an HTTP GET on `path` | `let res = client.get("projects");` |
 | delete  | path(string) | object | do an HTTP DELETE on `path` | `let res = client.delete("projects/1345/groups/43");` |
+| delete_with_body  | path(string), values (object) | object | do an HTTP DELETE on `path` with a JSON body — for APIs that expect the key in the request body | `let res = client.delete_with_body("items", #{id: 42});` |
 | patch  | path(string), values (object) | object | do an HTTP PATCH on `path` | `let res = client.patch("projects/1345/groups/43", #{name: "test"});` |
-| post  | path(string), values (object) | object | do an HTTP POST on `path` | `let res = client.post("projects/1345/groups/43", #{name: "test"});` |
+| post  | path(string), values (object) | object | do an HTTP POST on `path` with a JSON body | `let res = client.post("projects/1345/groups/43", #{name: "test"});` |
+| post_form  | path(string), values (object) | object | do an HTTP POST on `path` with an `application/x-www-form-urlencoded` body — for OAuth2 token endpoints and similar form-based APIs | `let res = client.post_form("oauth/token", #{grant_type: "client_credentials", client_id: "id", client_secret: "secret"});` |
 | put  | path(string), values (object) | object | do an HTTP PUT on `path` | `let res = client.put("projects/1345/groups/43", #{name: "test"});` |
 
 In the context of duplicating data to an other service, you can create an other client:

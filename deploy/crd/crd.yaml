@@ -47,6 +47,10 @@ spec:
                   baseurl:
                     description: The baseurl the client will use. All path will use this as a prefix
                     type: string
+                  childrenNoSubKey:
+                    description: 'If true, updates and deletes use the same path as create and include the primary key in the payload (default: false)'
+                    nullable: true
+                    type: boolean
                   clientCert:
                     description: mTLS client certificate
                     nullable: true
@@ -59,6 +63,7 @@ spec:
                     description: 'Method to use when creating an object (default: Get)'
                     enum:
                     - Post
+                    - Put
                     - null
                     nullable: true
                     type: string
@@ -100,6 +105,7 @@ spec:
                     - Patch
                     - Put
                     - Post
+                    - None
                     - null
                     nullable: true
                     type: string
@@ -333,10 +339,15 @@ spec:
                 items:
                   description: writeGroup describe a rest endpoint within the client sub-paths,
                   properties:
+                    childrenNoSubKey:
+                      description: 'If true, updates and deletes use the same path as create and include the primary key in the payload (default: client value or false)'
+                      nullable: true
+                      type: boolean
                     createMethod:
                       description: 'Method to use when creating an object (default: Post)'
                       enum:
                       - Post
+                      - Put
                       - null
                       nullable: true
                       type: string
@@ -406,6 +417,7 @@ spec:
                       - Patch
                       - Put
                       - Post
+                      - None
                       - null
                       nullable: true
                       type: string
@@ -505,11 +517,19 @@ spec:
                 items:
                   description: List all owned rest objects
                   properties:
+                    childrenNoSubKey:
+                      description: If true, deletes include the key in the payload instead of the URL
+                      nullable: true
+                      type: boolean
                     group:
                       description: Object writeGroup
                       type: string
                     key:
                       description: Object key
+                      type: string
+                    keyName:
+                      description: 'Key field name used for payload construction (default: id)'
+                      nullable: true
                       type: string
                     name:
                       description: Object name within its writeGroup

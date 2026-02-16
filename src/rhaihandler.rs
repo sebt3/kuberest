@@ -120,7 +120,9 @@ impl Script {
             .register_fn("http_post", RestClient::rhai_post)
             .register_fn("http_put", RestClient::rhai_put)
             .register_fn("post_form", RestClient::rhai_post_form)
-            .register_fn("http_post_form", RestClient::rhai_post_form);
+            .register_fn("http_post_form", RestClient::rhai_post_form)
+            .register_fn("delete_with_body", RestClient::rhai_delete_with_body)
+            .register_fn("http_delete_with_body", RestClient::rhai_delete_with_body);
         script
             .engine
             .register_type_with_name::<Argon>("Argon")

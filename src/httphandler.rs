@@ -27,7 +27,7 @@ pub enum UpdateMethod {
     Patch,
     Put,
     Post,
-    None
+    None,
 }
 
 #[derive(Serialize, Deserialize, Eq, PartialEq, Clone, Debug, JsonSchema, Default)]
@@ -675,9 +675,102 @@ impl RestClient {
         Ok(json)
     }
 
+    pub fn http_delete_with_body(&mut self, path: &str, body: &str) -> Result<Response, reqwest::Error> {
+        debug!(
+            "http_delete_with_body '{}' ",
+            format!("{}/{}", self.baseurl, path)
+        );
+        match self.get_client() {
+            Ok(client) => {
+                let mut req = client
+                    .delete(format!("{}/{}", self.baseurl, path))
+                    .body(body.to_string());
+                for (key, val) in self.headers.clone() {
+                    req = req.header(key.to_string(), val.to_string());
+                }
+                tokio::task::block_in_place(|| Handle::current().block_on(async move { req.send().await }))
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn body_delete_with_body(&mut self, path: &str, body: &str) -> Result<String, Error> {
+        let response = self
+            .http_delete_with_body(path, body)
+            .map_err(Error::ReqwestError)?;
+        if !response.status().is_success() && response.status() != StatusCode::NOT_FOUND {
+            let status = response.status();
+            let text = tokio::task::block_in_place(|| {
+                Handle::current().block_on(async move { response.text().await })
+            })
+            .map_err(Error::ReqwestError)?;
+            return Err(Error::MethodFailed(
+                "Delete".to_string(),
+                status.as_u16(),
+                format!(
+                    "The server returned the error: {} {} | {text}",
+                    status.as_str(),
+                    status.canonical_reason().unwrap_or("unknown")
+                ),
+            ));
+        }
+        let text =
+            tokio::task::block_in_place(|| Handle::current().block_on(async move { response.text().await }))
+                .map_err(Error::ReqwestError)?;
+        Ok(text)
+    }
+
+    pub fn json_delete_with_body(&mut self, path: &str, input: &Value) -> Result<Value, Error> {
+        let body = serde_json::to_string(input).map_err(Error::JsonError)?;
+        let text = self.body_delete_with_body(path, body.as_str())?;
+        let json =
+            serde_json::from_str(&text).or_else(|_| Ok::<serde_json::Value, Error>(json!({"body": text})))?;
+        Ok(json)
+    }
+
     pub fn rhai_delete(&mut self, path: String) -> RhaiRes<Map> {
         let mut ret = Map::new();
         match self.http_delete(path.as_str()) {
+            Ok(result) => {
+                ret.insert(
+                    "code".to_string().into(),
+                    Dynamic::from_int(result.status().as_u16().to_string().parse::<i64>().unwrap()),
+                );
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let headers = result
+                            .headers()
+                            .into_iter()
+                            .map(|(key, val)| {
+                                (
+                                    key.as_str().to_string(),
+                                    val.to_str().unwrap_or_default().to_string(),
+                                )
+                            })
+                            .collect::<Vec<(String, String)>>();
+                        let text = result.text().await.unwrap();
+                        ret.insert(
+                            "json".to_string().into(),
+                            serde_json::from_str(&text).unwrap_or(Dynamic::from(json!({}))),
+                        );
+                        ret.insert("headers".to_string().into(), Dynamic::from(headers.clone()));
+                        ret.insert("body".to_string().into(), Dynamic::from(text));
+                        Ok(ret)
+                    })
+                })
+            }
+            Err(e) => Err(format!("{e}").into()),
+        }
+    }
+
+    pub fn rhai_delete_with_body(&mut self, path: String, val: Dynamic) -> RhaiRes<Map> {
+        let body = if val.is_string() {
+            val.to_string()
+        } else {
+            serde_json::to_string(&val).unwrap()
+        };
+        let mut ret = Map::new();
+        match self.http_delete_with_body(path.as_str(), &body) {
             Ok(result) => {
                 ret.insert(
                     "code".to_string().into(),
@@ -766,6 +859,19 @@ impl RestClient {
         };
         if method == DeleteMethod::Delete {
             self.json_delete(&full_path)
+        } else {
+            Err(UnsupportedMethod)
+        }
+    }
+
+    pub fn obj_delete_with_body(
+        &mut self,
+        method: DeleteMethod,
+        path: &str,
+        input: &Value,
+    ) -> Result<Value, Error> {
+        if method == DeleteMethod::Delete {
+            self.json_delete_with_body(path, input)
         } else {
             Err(UnsupportedMethod)
         }

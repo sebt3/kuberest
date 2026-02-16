@@ -123,6 +123,8 @@ pub struct WebClient {
     pub client_key: Option<String>,
     /// mTLS client certificate
     pub client_cert: Option<String>,
+    /// If true, updates and deletes use the same path as create and include the primary key in the payload (default: false)
+    pub children_no_sub_key: Option<bool>,
 }
 impl Default for WebClient {
     fn default() -> Self {
@@ -138,6 +140,7 @@ impl Default for WebClient {
             server_ca: None,
             client_cert: None,
             client_key: None,
+            children_no_sub_key: Some(false),
         }
     }
 }
@@ -208,6 +211,8 @@ pub struct WriteGroup {
     pub items: Vec<WriteGroupItem>,
     /// Delete the Objects on RestEndPoint deletion (default: true, inability to do so will block RestEndPoint)
     teardown: Option<bool>,
+    /// If true, updates and deletes use the same path as create and include the primary key in the payload (default: client value or false)
+    pub children_no_sub_key: Option<bool>,
 }
 
 /// metadata describe a rest endpoint within the client sub-paths
@@ -444,16 +449,30 @@ pub struct OwnedRestPoint {
     pub name: String,
     /// should we manage this object deletion
     pub teardown: bool,
+    /// If true, deletes include the key in the payload instead of the URL
+    pub children_no_sub_key: Option<bool>,
+    /// Key field name used for payload construction (default: id)
+    pub key_name: Option<String>,
 }
 impl OwnedRestPoint {
     #[must_use]
-    pub fn new(path: &str, key: &str, group: &str, name: &str, teardown: bool) -> OwnedRestPoint {
+    pub fn new(
+        path: &str,
+        key: &str,
+        group: &str,
+        name: &str,
+        teardown: bool,
+        children_no_sub_key: bool,
+        key_name: &str,
+    ) -> OwnedRestPoint {
         OwnedRestPoint {
             path: path.to_string(),
             key: key.to_string(),
             group: group.to_string(),
             name: name.to_string(),
             teardown,
+            children_no_sub_key: Some(children_no_sub_key),
+            key_name: Some(key_name.to_string()),
         }
     }
 }
@@ -1189,6 +1208,9 @@ impl RestEndPoint {
                 let key_name = group
                     .key_name
                     .unwrap_or(self.spec.client.key_name.clone().unwrap_or("id".to_string()));
+                let children_no_sub_key = group
+                    .children_no_sub_key
+                    .unwrap_or(self.spec.client.children_no_sub_key.unwrap_or(false));
                 values["write"][group.name.clone()] = serde_json::json!({});
                 let path = template!(group.path.as_str(), hbs, &values, conditions, recorder, &obj_ref);
                 for item in group.items {
@@ -1230,6 +1252,17 @@ impl RestEndPoint {
                                 )));
                                 "".to_string()
                             } else {
+                                let (update_path, update_key, update_vals) = if children_no_sub_key {
+                                    let mut merged = vals.clone();
+                                    merged[key_name.clone()] = json!(myself.key);
+                                    (path.clone(), "".to_string(), merged)
+                                } else {
+                                    (
+                                        group.update_path.clone().unwrap_or(path.clone()),
+                                        myself.key.clone(),
+                                        vals.clone(),
+                                    )
+                                };
                                 let mut obj = rest
                                     .clone()
                                     .obj_update(
@@ -1240,9 +1273,9 @@ impl RestEndPoint {
                                                 .clone()
                                                 .unwrap_or(UpdateMethod::Patch),
                                         ),
-                                        group.update_path.clone().unwrap_or(path.clone()).as_str(),
-                                        &myself.key,
-                                        &vals,
+                                        update_path.as_str(),
+                                        &update_key,
+                                        &update_vals,
                                     )
                                     .unwrap_or_else(|e| {
                                         giveup = if let Error::MethodFailed(_, code, _) = e {
@@ -1419,8 +1452,13 @@ impl RestEndPoint {
                             } else {
                                 key.as_str()
                             };
+                            let owned_path = if children_no_sub_key {
+                                path.clone()
+                            } else {
+                                group.update_path.clone().unwrap_or(path.clone())
+                            };
                             target_new.push(OwnedRestPoint::new(
-                                group.update_path.clone().unwrap_or(path.clone()).as_str(),
+                                owned_path.as_str(),
                                 my_key,
                                 group.name.as_str(),
                                 item.name.as_str(),
@@ -1429,6 +1467,8 @@ impl RestEndPoint {
                                         .teardown
                                         .unwrap_or(self.spec.client.teardown.unwrap_or(true)),
                                 ),
+                                children_no_sub_key,
+                                key_name.as_str(),
                             ));
                         } else if giveup {
                             failures += 1;
@@ -1446,41 +1486,50 @@ impl RestEndPoint {
                         .into_iter()
                         .any(|t| t.group == old.group && t.name == old.name)
                 {
-                    rest.obj_delete(DeleteMethod::Delete, &old.path, &old.key)
-                        .unwrap_or_else(|e| {
-                            let giveup = if let Error::MethodFailed(_, code, _) = e {
-                                code == 404
-                            } else {
-                                false
-                            };
-                            // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
-                            if !self.spec.client.teardown.unwrap_or(false) && !giveup {
-                                target_new.push(old.clone());
-                                conditions.push(ApplicationCondition::write_delete_failed(
-                                    format!(
-                                        "Deleting write.{}.{} {e:?}",
-                                        old.group.as_str(),
-                                        old.name.as_str()
-                                    )
-                                    .as_str(),
-                                ));
-                            }
+                    let delete_result = if old.children_no_sub_key.unwrap_or(false) {
+                        let del_key_name = old.key_name.clone().unwrap_or("id".to_string());
+                        rest.obj_delete_with_body(
+                            DeleteMethod::Delete,
+                            &old.path,
+                            &json!({del_key_name: old.key}),
+                        )
+                    } else {
+                        rest.obj_delete(DeleteMethod::Delete, &old.path, &old.key)
+                    };
+                    delete_result.unwrap_or_else(|e| {
+                        let giveup = if let Error::MethodFailed(_, code, _) = e {
+                            code == 404
+                        } else {
+                            false
+                        };
+                        // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
+                        if !self.spec.client.teardown.unwrap_or(false) && !giveup {
                             target_new.push(old.clone());
-                            tokio::task::block_in_place(|| {
-                                Handle::current().block_on(async {
-                                    Self::publish_warning(
-                                        &recorder,
-                                        &obj_ref,
-                                        format!("Failed deleting: write.{}.{}", old.group, old.name),
-                                        format!("{e:?}"),
-                                        String::from("deleting"),
-                                    )
-                                    .await
-                                    .unwrap_or(());
-                                })
-                            });
-                            json!({})
+                            conditions.push(ApplicationCondition::write_delete_failed(
+                                format!(
+                                    "Deleting write.{}.{} {e:?}",
+                                    old.group.as_str(),
+                                    old.name.as_str()
+                                )
+                                .as_str(),
+                            ));
+                        }
+                        target_new.push(old.clone());
+                        tokio::task::block_in_place(|| {
+                            Handle::current().block_on(async {
+                                Self::publish_warning(
+                                    &recorder,
+                                    &obj_ref,
+                                    format!("Failed deleting: write.{}.{}", old.group, old.name),
+                                    format!("{e:?}"),
+                                    String::from("deleting"),
+                                )
+                                .await
+                                .unwrap_or(());
+                            })
                         });
+                        json!({})
+                    });
                 }
             }
         } else {
@@ -2234,40 +2283,49 @@ impl RestEndPoint {
         if let Some(status) = self.status.clone() {
             for obj in status.owned_target {
                 if obj.teardown && !obj.key.is_empty() {
-                    rest.obj_delete(DeleteMethod::Delete, &obj.path, &obj.key)
-                        .unwrap_or_else(|e| {
-                            let giveup = if let Error::MethodFailed(_, code, _) = e {
-                                code == 404
-                            } else {
-                                false
-                            };
-                            // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
-                            if !self.spec.client.teardown.unwrap_or(false) && !giveup {
-                                target_new.push(obj.clone());
-                                conditions.push(ApplicationCondition::write_delete_failed(
-                                    format!(
-                                        "Deleting write.{}.{} {e:?}",
-                                        obj.group.as_str(),
-                                        obj.name.as_str()
-                                    )
-                                    .as_str(),
-                                ));
-                            }
-                            tokio::task::block_in_place(|| {
-                                Handle::current().block_on(async {
-                                    Self::publish_warning(
-                                        &recorder,
-                                        &obj_ref,
-                                        format!("Failed deleting: write.{}.{}", obj.group, obj.name),
-                                        format!("{e:?}"),
-                                        String::from("deleting"),
-                                    )
-                                    .await
-                                    .unwrap_or(());
-                                })
-                            });
-                            json!({})
+                    let delete_result = if obj.children_no_sub_key.unwrap_or(false) {
+                        let del_key_name = obj.key_name.clone().unwrap_or("id".to_string());
+                        rest.obj_delete_with_body(
+                            DeleteMethod::Delete,
+                            &obj.path,
+                            &json!({del_key_name: obj.key}),
+                        )
+                    } else {
+                        rest.obj_delete(DeleteMethod::Delete, &obj.path, &obj.key)
+                    };
+                    delete_result.unwrap_or_else(|e| {
+                        let giveup = if let Error::MethodFailed(_, code, _) = e {
+                            code == 404
+                        } else {
+                            false
+                        };
+                        // Allow the user to quit the finalizer loop by setting spec.client.teardown to true
+                        if !self.spec.client.teardown.unwrap_or(false) && !giveup {
+                            target_new.push(obj.clone());
+                            conditions.push(ApplicationCondition::write_delete_failed(
+                                format!(
+                                    "Deleting write.{}.{} {e:?}",
+                                    obj.group.as_str(),
+                                    obj.name.as_str()
+                                )
+                                .as_str(),
+                            ));
+                        }
+                        tokio::task::block_in_place(|| {
+                            Handle::current().block_on(async {
+                                Self::publish_warning(
+                                    &recorder,
+                                    &obj_ref,
+                                    format!("Failed deleting: write.{}.{}", obj.group, obj.name),
+                                    format!("{e:?}"),
+                                    String::from("deleting"),
+                                )
+                                .await
+                                .unwrap_or(());
+                            })
                         });
+                        json!({})
+                    });
                 }
             }
         }

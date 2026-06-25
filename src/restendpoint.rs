@@ -783,39 +783,46 @@ impl RestEndPoint {
                         ns.clone()
                     };
                     let mut secrets = SecretHandler::new(&ctx.client.clone(), &my_ns);
-                    if secrets.have(&secret.name).await {
-                        let my_secret = secrets.get(&secret.name).await.unwrap();
-                        values["input"][input.name] = serde_json::json!({
-                            "metadata": my_secret.metadata,
-                            "data": my_secret.data
-                        });
-                    } else if secret.optional.unwrap_or(false) {
-                        Self::publish(
-                            &recorder,
-                            &obj_ref,
-                            String::from("IgnoredInput"),
-                            format!("Ignoring not found secret for Input '{}'", input.name),
-                            String::from("readingInput"),
-                        )
-                        .await?;
-                        conditions.push(ApplicationCondition::input_missing(&format!(
-                            "Input '{}' Secret {}.{} not found",
-                            input.name, my_ns, secret.name
-                        )));
-                        values["input"][input.name] = serde_json::json!({});
-                    } else {
-                        Self::publish(
-                            &recorder,
-                            &obj_ref,
-                            String::from("MissingSecret"),
-                            format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
-                            String::from("readingInput"),
-                        )
-                        .await?;
-                        conditions.push(ApplicationCondition::input_failed(&format!(
-                            "Input '{}' Secret {}.{} not found",
-                            input.name, my_ns, secret.name
-                        )));
+                    match secrets.get(&secret.name).await {
+                        Ok(my_secret) => {
+                            values["input"][input.name] = serde_json::json!({
+                                "metadata": my_secret.metadata,
+                                "data": my_secret.data
+                            });
+                        }
+                        Err(e) => {
+                            if secret.optional.unwrap_or(false) {
+                                let _ = Self::publish(
+                                    &recorder,
+                                    &obj_ref,
+                                    String::from("IgnoredInput"),
+                                    format!("Ignoring not found secret for Input '{}'", input.name),
+                                    String::from("readingInput"),
+                                )
+                                .await;
+                                warn!("Optional secret '{}' not found for Input '{}': {}", secret.name, input.name, e);
+                                conditions.push(ApplicationCondition::input_missing(&format!(
+                                    "Input '{}' Secret {}.{} not found",
+                                    input.name, my_ns, secret.name
+                                )));
+                                values["input"][input.name] = serde_json::json!({});
+                            } else {
+                                let _ = Self::publish(
+                                    &recorder,
+                                    &obj_ref,
+                                    String::from("MissingSecret"),
+                                    format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                                    String::from("readingInput"),
+                                )
+                                .await;
+                                error!("Required secret '{}' not found for Input '{}': {}", secret.name, input.name, e);
+                                return Err(Error::MethodFailed(
+                                    "ReadSecret".to_string(),
+                                    404,
+                                    format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                                ));
+                            }
+                        }
                     }
                 } else if let Some(cfgmap) = input.config_map_ref {
                     let my_ns = if use_multi {
@@ -835,40 +842,47 @@ impl RestEndPoint {
                         ns.clone()
                     };
                     let mut maps = ConfigMapHandler::new(&ctx.client.clone(), &my_ns);
-                    if maps.have(&cfgmap.name).await {
-                        let my_cfg = maps.get(&cfgmap.name).await.unwrap();
-                        values["input"][input.name] = serde_json::json!({
-                            "metadata": my_cfg.metadata,
-                            "data": my_cfg.data,
-                            "binaryData": my_cfg.binary_data
-                        });
-                    } else if cfgmap.optional.unwrap_or(false) {
-                        Self::publish(
-                            &recorder,
-                            &obj_ref,
-                            String::from("IgnoredInput"),
-                            format!("Ignoring not found ConfigMap for Input '{}'", input.name),
-                            String::from("readingInput"),
-                        )
-                        .await?;
-                        conditions.push(ApplicationCondition::input_missing(&format!(
-                            "Input '{}' ConfigMap {}.{} not found",
-                            input.name, my_ns, cfgmap.name
-                        )));
-                        values["input"][input.name] = serde_json::json!({});
-                    } else {
-                        Self::publish(
-                            &recorder,
-                            &obj_ref,
-                            String::from("MissingConfigMap"),
-                            format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
-                            String::from("readingInput"),
-                        )
-                        .await?;
-                        conditions.push(ApplicationCondition::input_failed(&format!(
-                            "Input '{}' ConfigMap {}.{} not found",
-                            input.name, my_ns, cfgmap.name
-                        )));
+                    match maps.get(&cfgmap.name).await {
+                        Ok(my_cfg) => {
+                            values["input"][input.name] = serde_json::json!({
+                                "metadata": my_cfg.metadata,
+                                "data": my_cfg.data,
+                                "binaryData": my_cfg.binary_data
+                            });
+                        }
+                        Err(e) => {
+                            if cfgmap.optional.unwrap_or(false) {
+                                let _ = Self::publish(
+                                    &recorder,
+                                    &obj_ref,
+                                    String::from("IgnoredInput"),
+                                    format!("Ignoring not found ConfigMap for Input '{}'", input.name),
+                                    String::from("readingInput"),
+                                )
+                                .await;
+                                warn!("Optional configmap '{}' not found for Input '{}': {}", cfgmap.name, input.name, e);
+                                conditions.push(ApplicationCondition::input_missing(&format!(
+                                    "Input '{}' ConfigMap {}.{} not found",
+                                    input.name, my_ns, cfgmap.name
+                                )));
+                                values["input"][input.name] = serde_json::json!({});
+                            } else {
+                                let _ = Self::publish(
+                                    &recorder,
+                                    &obj_ref,
+                                    String::from("MissingConfigMap"),
+                                    format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                    String::from("readingInput"),
+                                )
+                                .await;
+                                error!("Required configmap '{}' not found for Input '{}': {}", cfgmap.name, input.name, e);
+                                return Err(Error::MethodFailed(
+                                    "ReadConfigMap".to_string(),
+                                    404,
+                                    format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                ));
+                            }
+                        }
                     }
                 } else if let Some(render) = input.handle_bars_render {
                     values["input"][input.name] = json!(template!(
@@ -2007,39 +2021,46 @@ impl RestEndPoint {
                             ns.clone()
                         };
                         let mut secrets = SecretHandler::new(&ctx.client.clone(), &my_ns);
-                        if secrets.have(&secret.name).await {
-                            let my_secret = secrets.get(&secret.name).await.unwrap();
-                            values["input"][input.name] = serde_json::json!({
-                                "metadata": my_secret.metadata,
-                                "data": my_secret.data
-                            });
-                        } else if secret.optional.unwrap_or(false) {
-                            Self::publish(
-                                &recorder,
-                                &obj_ref,
-                                String::from("IgnoredInput"),
-                                format!("Ignoring not found secret for Input '{}'", input.name),
-                                String::from("readingInput"),
-                            )
-                            .await?;
-                            conditions.push(ApplicationCondition::input_missing(&format!(
-                                "Input '{}' Secret {}.{} not found",
-                                input.name, my_ns, secret.name
-                            )));
-                            values["input"][input.name] = serde_json::json!({});
-                        } else {
-                            Self::publish(
-                                &recorder,
-                                &obj_ref,
-                                String::from("MissingSecret"),
-                                format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
-                                String::from("readingInput"),
-                            )
-                            .await?;
-                            conditions.push(ApplicationCondition::input_failed(&format!(
-                                "Input '{}' Secret {}.{} not found",
-                                input.name, my_ns, secret.name
-                            )));
+                        match secrets.get(&secret.name).await {
+                            Ok(my_secret) => {
+                                values["input"][input.name] = serde_json::json!({
+                                    "metadata": my_secret.metadata,
+                                    "data": my_secret.data
+                                });
+                            }
+                            Err(e) => {
+                                if secret.optional.unwrap_or(false) {
+                                    let _ = Self::publish(
+                                        &recorder,
+                                        &obj_ref,
+                                        String::from("IgnoredInput"),
+                                        format!("Ignoring not found secret for Input '{}'", input.name),
+                                        String::from("readingInput"),
+                                    )
+                                    .await;
+                                    warn!("Optional secret '{}' not found for Input '{}': {}", secret.name, input.name, e);
+                                    conditions.push(ApplicationCondition::input_missing(&format!(
+                                        "Input '{}' Secret {}.{} not found",
+                                        input.name, my_ns, secret.name
+                                    )));
+                                    values["input"][input.name] = serde_json::json!({});
+                                } else {
+                                    let _ = Self::publish(
+                                        &recorder,
+                                        &obj_ref,
+                                        String::from("MissingSecret"),
+                                        format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                                        String::from("readingInput"),
+                                    )
+                                    .await;
+                                    error!("Required secret '{}' not found for Input '{}': {}", secret.name, input.name, e);
+                                    return Err(Error::MethodFailed(
+                                        "ReadSecret".to_string(),
+                                        404,
+                                        format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                                    ));
+                                }
+                            }
                         }
                     } else if let Some(cfgmap) = input.config_map_ref {
                         let my_ns = if use_multi {
@@ -2059,40 +2080,47 @@ impl RestEndPoint {
                             ns.clone()
                         };
                         let mut maps = ConfigMapHandler::new(&ctx.client.clone(), &my_ns);
-                        if maps.have(&cfgmap.name).await {
-                            let my_cfg = maps.get(&cfgmap.name).await.unwrap();
-                            values["input"][input.name] = serde_json::json!({
-                                "metadata": my_cfg.metadata,
-                                "data": my_cfg.data,
-                                "binaryData": my_cfg.binary_data
-                            });
-                        } else if cfgmap.optional.unwrap_or(false) {
-                            Self::publish(
-                                &recorder,
-                                &obj_ref,
-                                String::from("IgnoredInput"),
-                                format!("Ignoring not found ConfigMap for Input '{}'", input.name),
-                                String::from("readingInput"),
-                            )
-                            .await?;
-                            conditions.push(ApplicationCondition::input_missing(&format!(
-                                "Input '{}' ConfigMap {}.{} not found",
-                                input.name, my_ns, cfgmap.name
-                            )));
-                            values["input"][input.name] = serde_json::json!({});
-                        } else {
-                            Self::publish(
-                                &recorder,
-                                &obj_ref,
-                                String::from("MissingConfigMap"),
-                                format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
-                                String::from("readingInput"),
-                            )
-                            .await?;
-                            conditions.push(ApplicationCondition::input_failed(&format!(
-                                "Input '{}' ConfigMap {}.{} not found",
-                                input.name, my_ns, cfgmap.name
-                            )));
+                        match maps.get(&cfgmap.name).await {
+                            Ok(my_cfg) => {
+                                values["input"][input.name] = serde_json::json!({
+                                    "metadata": my_cfg.metadata,
+                                    "data": my_cfg.data,
+                                    "binaryData": my_cfg.binary_data
+                                });
+                            }
+                            Err(e) => {
+                                if cfgmap.optional.unwrap_or(false) {
+                                    let _ = Self::publish(
+                                        &recorder,
+                                        &obj_ref,
+                                        String::from("IgnoredInput"),
+                                        format!("Ignoring not found ConfigMap for Input '{}'", input.name),
+                                        String::from("readingInput"),
+                                    )
+                                    .await;
+                                    warn!("Optional configmap '{}' not found for Input '{}': {}", cfgmap.name, input.name, e);
+                                    conditions.push(ApplicationCondition::input_missing(&format!(
+                                        "Input '{}' ConfigMap {}.{} not found",
+                                        input.name, my_ns, cfgmap.name
+                                    )));
+                                    values["input"][input.name] = serde_json::json!({});
+                                } else {
+                                    let _ = Self::publish(
+                                        &recorder,
+                                        &obj_ref,
+                                        String::from("MissingConfigMap"),
+                                        format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                        String::from("readingInput"),
+                                    )
+                                    .await;
+                                    error!("Required configmap '{}' not found for Input '{}': {}", cfgmap.name, input.name, e);
+                                    return Err(Error::MethodFailed(
+                                        "ReadConfigMap".to_string(),
+                                        404,
+                                        format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                    ));
+                                }
+                            }
                         }
                     } else if let Some(render) = input.handle_bars_render {
                         values["input"][input.name] = json!(template!(

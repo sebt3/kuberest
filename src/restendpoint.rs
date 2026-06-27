@@ -800,7 +800,10 @@ impl RestEndPoint {
                                     String::from("readingInput"),
                                 )
                                 .await;
-                                warn!("Optional secret '{}' not found for Input '{}': {}", secret.name, input.name, e);
+                                warn!(
+                                    "Optional secret '{}' not found for Input '{}': {}",
+                                    secret.name, input.name, e
+                                );
                                 conditions.push(ApplicationCondition::input_missing(&format!(
                                     "Input '{}' Secret {}.{} not found",
                                     input.name, my_ns, secret.name
@@ -815,7 +818,10 @@ impl RestEndPoint {
                                     String::from("readingInput"),
                                 )
                                 .await;
-                                error!("Required secret '{}' not found for Input '{}': {}", secret.name, input.name, e);
+                                error!(
+                                    "Required secret '{}' not found for Input '{}': {}",
+                                    secret.name, input.name, e
+                                );
                                 return Err(Error::MethodFailed(
                                     "ReadSecret".to_string(),
                                     404,
@@ -860,7 +866,10 @@ impl RestEndPoint {
                                     String::from("readingInput"),
                                 )
                                 .await;
-                                warn!("Optional configmap '{}' not found for Input '{}': {}", cfgmap.name, input.name, e);
+                                warn!(
+                                    "Optional configmap '{}' not found for Input '{}': {}",
+                                    cfgmap.name, input.name, e
+                                );
                                 conditions.push(ApplicationCondition::input_missing(&format!(
                                     "Input '{}' ConfigMap {}.{} not found",
                                     input.name, my_ns, cfgmap.name
@@ -871,15 +880,24 @@ impl RestEndPoint {
                                     &recorder,
                                     &obj_ref,
                                     String::from("MissingConfigMap"),
-                                    format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                    format!(
+                                        "ConfigMap '{}' not found for Input '{}'",
+                                        cfgmap.name, input.name
+                                    ),
                                     String::from("readingInput"),
                                 )
                                 .await;
-                                error!("Required configmap '{}' not found for Input '{}': {}", cfgmap.name, input.name, e);
+                                error!(
+                                    "Required configmap '{}' not found for Input '{}': {}",
+                                    cfgmap.name, input.name, e
+                                );
                                 return Err(Error::MethodFailed(
                                     "ReadConfigMap".to_string(),
                                     404,
-                                    format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                    format!(
+                                        "ConfigMap '{}' not found for Input '{}'",
+                                        cfgmap.name, input.name
+                                    ),
                                 ));
                             }
                         }
@@ -2038,7 +2056,10 @@ impl RestEndPoint {
                                         String::from("readingInput"),
                                     )
                                     .await;
-                                    warn!("Optional secret '{}' not found for Input '{}': {}", secret.name, input.name, e);
+                                    warn!(
+                                        "Optional secret '{}' not found for Input '{}': {}",
+                                        secret.name, input.name, e
+                                    );
                                     conditions.push(ApplicationCondition::input_missing(&format!(
                                         "Input '{}' Secret {}.{} not found",
                                         input.name, my_ns, secret.name
@@ -2049,15 +2070,24 @@ impl RestEndPoint {
                                         &recorder,
                                         &obj_ref,
                                         String::from("MissingSecret"),
-                                        format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                                        format!(
+                                            "Secret '{}' not found for Input '{}'",
+                                            secret.name, input.name
+                                        ),
                                         String::from("readingInput"),
                                     )
                                     .await;
-                                    error!("Required secret '{}' not found for Input '{}': {}", secret.name, input.name, e);
+                                    error!(
+                                        "Required secret '{}' not found for Input '{}': {}",
+                                        secret.name, input.name, e
+                                    );
                                     return Err(Error::MethodFailed(
                                         "ReadSecret".to_string(),
                                         404,
-                                        format!("Secret '{}' not found for Input '{}'", secret.name, input.name),
+                                        format!(
+                                            "Secret '{}' not found for Input '{}'",
+                                            secret.name, input.name
+                                        ),
                                     ));
                                 }
                             }
@@ -2098,7 +2128,10 @@ impl RestEndPoint {
                                         String::from("readingInput"),
                                     )
                                     .await;
-                                    warn!("Optional configmap '{}' not found for Input '{}': {}", cfgmap.name, input.name, e);
+                                    warn!(
+                                        "Optional configmap '{}' not found for Input '{}': {}",
+                                        cfgmap.name, input.name, e
+                                    );
                                     conditions.push(ApplicationCondition::input_missing(&format!(
                                         "Input '{}' ConfigMap {}.{} not found",
                                         input.name, my_ns, cfgmap.name
@@ -2109,15 +2142,24 @@ impl RestEndPoint {
                                         &recorder,
                                         &obj_ref,
                                         String::from("MissingConfigMap"),
-                                        format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                        format!(
+                                            "ConfigMap '{}' not found for Input '{}'",
+                                            cfgmap.name, input.name
+                                        ),
                                         String::from("readingInput"),
                                     )
                                     .await;
-                                    error!("Required configmap '{}' not found for Input '{}': {}", cfgmap.name, input.name, e);
+                                    error!(
+                                        "Required configmap '{}' not found for Input '{}': {}",
+                                        cfgmap.name, input.name, e
+                                    );
                                     return Err(Error::MethodFailed(
                                         "ReadConfigMap".to_string(),
                                         404,
-                                        format!("ConfigMap '{}' not found for Input '{}'", cfgmap.name, input.name),
+                                        format!(
+                                            "ConfigMap '{}' not found for Input '{}'",
+                                            cfgmap.name, input.name
+                                        ),
                                     ));
                                 }
                             }

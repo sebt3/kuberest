@@ -254,7 +254,10 @@ impl RestClient {
                         let text = match result.text().await {
                             Ok(t) => t,
                             Err(e) => {
-                                ret.insert("body".to_string().into(), Dynamic::from(format!("Error reading response body: {e}")));
+                                ret.insert(
+                                    "body".to_string().into(),
+                                    Dynamic::from(format!("Error reading response body: {e}")),
+                                );
                                 ret.insert("json".to_string().into(), Dynamic::from(json!({})));
                                 ret.insert("headers".to_string().into(), Dynamic::from(headers));
                                 return Err(format!("Error reading response body: {e}").into());
@@ -396,7 +399,10 @@ impl RestClient {
                         let text = match result.text().await {
                             Ok(t) => t,
                             Err(e) => {
-                                ret.insert("body".to_string().into(), Dynamic::from(format!("Error reading response body: {e}")));
+                                ret.insert(
+                                    "body".to_string().into(),
+                                    Dynamic::from(format!("Error reading response body: {e}")),
+                                );
                                 ret.insert("json".to_string().into(), Dynamic::from(json!({})));
                                 ret.insert("headers".to_string().into(), Dynamic::from(headers));
                                 return Err(format!("Error reading response body: {e}").into());
@@ -494,7 +500,10 @@ impl RestClient {
                         let text = match result.text().await {
                             Ok(t) => t,
                             Err(e) => {
-                                ret.insert("body".to_string().into(), Dynamic::from(format!("Error reading response body: {e}")));
+                                ret.insert(
+                                    "body".to_string().into(),
+                                    Dynamic::from(format!("Error reading response body: {e}")),
+                                );
                                 ret.insert("json".to_string().into(), Dynamic::from(json!({})));
                                 ret.insert("headers".to_string().into(), Dynamic::from(headers));
                                 return Err(format!("Error reading response body: {e}").into());
@@ -592,7 +601,10 @@ impl RestClient {
                         let text = match result.text().await {
                             Ok(t) => t,
                             Err(e) => {
-                                ret.insert("body".to_string().into(), Dynamic::from(format!("Error reading response body: {e}")));
+                                ret.insert(
+                                    "body".to_string().into(),
+                                    Dynamic::from(format!("Error reading response body: {e}")),
+                                );
                                 ret.insert("json".to_string().into(), Dynamic::from(json!({})));
                                 ret.insert("headers".to_string().into(), Dynamic::from(headers));
                                 return Err(format!("Error reading response body: {e}").into());
@@ -659,7 +671,10 @@ impl RestClient {
                         let text = match result.text().await {
                             Ok(t) => t,
                             Err(e) => {
-                                ret.insert("body".to_string().into(), Dynamic::from(format!("Error reading response body: {e}")));
+                                ret.insert(
+                                    "body".to_string().into(),
+                                    Dynamic::from(format!("Error reading response body: {e}")),
+                                );
                                 ret.insert("json".to_string().into(), Dynamic::from(json!({})));
                                 ret.insert("headers".to_string().into(), Dynamic::from(headers));
                                 return Err(format!("Error reading response body: {e}").into());
@@ -800,7 +815,10 @@ impl RestClient {
                         let text = match result.text().await {
                             Ok(t) => t,
                             Err(e) => {
-                                ret.insert("body".to_string().into(), Dynamic::from(format!("Error reading response body: {e}")));
+                                ret.insert(
+                                    "body".to_string().into(),
+                                    Dynamic::from(format!("Error reading response body: {e}")),
+                                );
                                 ret.insert("json".to_string().into(), Dynamic::from(json!({})));
                                 ret.insert("headers".to_string().into(), Dynamic::from(headers));
                                 return Err(format!("Error reading response body: {e}").into());
@@ -851,7 +869,10 @@ impl RestClient {
                         let text = match result.text().await {
                             Ok(t) => t,
                             Err(e) => {
-                                ret.insert("body".to_string().into(), Dynamic::from(format!("Error reading response body: {e}")));
+                                ret.insert(
+                                    "body".to_string().into(),
+                                    Dynamic::from(format!("Error reading response body: {e}")),
+                                );
                                 ret.insert("json".to_string().into(), Dynamic::from(json!({})));
                                 ret.insert("headers".to_string().into(), Dynamic::from(headers));
                                 return Err(format!("Error reading response body: {e}").into());

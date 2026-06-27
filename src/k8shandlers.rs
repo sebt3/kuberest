@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::restendpoint::{Metadata, RESTPATH_FINALIZER, RestEndPoint};
+use tracing::warn;
 use anyhow::{Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use kube::{
@@ -28,7 +29,13 @@ impl SecretHandler {
     }
 
     pub async fn have(&mut self, name: &str) -> bool {
-        let list = self.list().await.unwrap();
+        let list = match self.list().await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("Failed to list secrets: {}", e);
+                return false;
+            }
+        };
         for secret in list {
             if secret.metadata.name.clone().unwrap_or_default() == name {
                 return true;
@@ -38,7 +45,13 @@ impl SecretHandler {
     }
 
     pub async fn have_with_data(&mut self, name: &str, strings: &HashMap<String, String>) -> bool {
-        let list = self.list().await.unwrap();
+        let list = match self.list().await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("Failed to list secrets: {}", e);
+                return false;
+            }
+        };
         let mut s: Option<Secret> = None;
         for secret in list {
             if secret.metadata.name.clone().unwrap_or_default() == name {
@@ -68,7 +81,13 @@ impl SecretHandler {
     }
 
     pub async fn have_uid(&mut self, name: &str, uid: &str) -> bool {
-        let list = self.list().await.unwrap();
+        let list = match self.list().await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("Failed to list secrets: {}", e);
+                return false;
+            }
+        };
         for secret in list {
             if secret.metadata.name.clone().unwrap_or_default() == name
                 && secret.metadata.uid.clone().unwrap_or_default() == uid
@@ -175,7 +194,13 @@ impl ConfigMapHandler {
     }
 
     pub async fn have(&mut self, name: &str) -> bool {
-        let list = self.list().await.unwrap();
+        let list = match self.list().await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("Failed to list configmaps: {}", e);
+                return false;
+            }
+        };
         for cm in list {
             if cm.metadata.name.clone().unwrap_or_default() == name {
                 return true;
@@ -185,7 +210,13 @@ impl ConfigMapHandler {
     }
 
     pub async fn have_uid(&mut self, name: &str, uid: &str) -> bool {
-        let list = self.list().await.unwrap();
+        let list = match self.list().await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("Failed to list configmaps: {}", e);
+                return false;
+            }
+        };
         for cm in list {
             if cm.metadata.name.clone().unwrap_or_default() == name
                 && cm.metadata.uid.clone().unwrap_or_default() == uid
@@ -197,7 +228,13 @@ impl ConfigMapHandler {
     }
 
     pub async fn have_with_data(&mut self, name: &str, datas: &HashMap<String, String>) -> bool {
-        let list = self.list().await.unwrap();
+        let list = match self.list().await {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("Failed to list configmaps: {}", e);
+                return false;
+            }
+        };
         let mut c: Option<ConfigMap> = None;
         for cm in list {
             if cm.metadata.name.clone().unwrap_or_default() == name {

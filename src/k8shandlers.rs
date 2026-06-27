@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use crate::restendpoint::{Metadata, RESTPATH_FINALIZER, RestEndPoint};
-use tracing::warn;
 use anyhow::{Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use kube::{
     Client,
     api::{Api, DeleteParams, ListParams, ObjectList, Patch, PatchParams, PostParams},
 };
+use tracing::warn;
 
 pub use k8s_openapi::api::core::v1::Secret;
 pub struct SecretHandler {

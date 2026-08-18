@@ -1,15 +1,14 @@
 use crate::{
     Error::{self, *},
     RhaiRes,
-    handlebarshandler::HandleBars,
-    hasheshandlers::Argon,
-    httphandler::RestClient,
+    handlebarshandler::{self, HandleBars},
     passwordhandler::Passwords,
     rhai_err,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rhai::{Dynamic, Engine, ImmutableString, Map, Module, Scope};
 use serde::Deserialize;
+use vynil_core::{hashes::Argon, http::http_rhai_register};
 
 #[derive(Debug)]
 pub struct Script {
@@ -30,8 +29,8 @@ impl Script {
             .register_fn("log_info", |s: ImmutableString| tracing::info!("{s}"))
             .register_fn("log_warn", |s: ImmutableString| tracing::warn!("{s}"))
             .register_fn("log_error", |s: ImmutableString| tracing::error!("{s}"))
-            .register_fn("bcrypt_hash", |s: ImmutableString| {
-                crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)
+            .register_fn("bcrypt_hash", |s: ImmutableString| -> RhaiRes<String> {
+                vynil_core::hashes::bcrypt_hash(s.to_string()).map_err(|e| format!("{e}").into())
             })
             .register_fn("gen_password", |len: u32| -> String {
                 Passwords::new().generate(len, 6, 2, 2)
@@ -93,36 +92,10 @@ impl Script {
         script
             .engine
             .register_type_with_name::<HandleBars>("HandleBars")
-            .register_fn("new_hbs", HandleBars::new)
+            .register_fn("new_hbs", handlebarshandler::new_hbs)
             .register_fn("register_template", HandleBars::rhai_register_template)
             .register_fn("render_from", HandleBars::rhai_render);
-        script
-            .engine
-            .register_type_with_name::<RestClient>("RestClient")
-            .register_fn("new_client", RestClient::new)
-            .register_fn("headers_reset", RestClient::headers_reset_rhai)
-            .register_fn("set_baseurl", RestClient::baseurl_rhai)
-            .register_fn("set_server_ca", RestClient::set_server_ca)
-            .register_fn("set_mtls_cert_key", RestClient::set_mtls)
-            .register_fn("add_header", RestClient::add_header_rhai)
-            .register_fn("add_header_json", RestClient::add_header_json)
-            .register_fn("add_header_bearer", RestClient::add_header_bearer)
-            .register_fn("add_header_basic", RestClient::add_header_basic)
-            .register_fn("head", RestClient::rhai_head)
-            .register_fn("get", RestClient::rhai_get)
-            .register_fn("delete", RestClient::rhai_delete)
-            .register_fn("patch", RestClient::rhai_patch)
-            .register_fn("post", RestClient::rhai_post)
-            .register_fn("put", RestClient::rhai_put)
-            .register_fn("http_get", RestClient::rhai_get)
-            .register_fn("http_delete", RestClient::rhai_delete)
-            .register_fn("http_patch", RestClient::rhai_patch)
-            .register_fn("http_post", RestClient::rhai_post)
-            .register_fn("http_put", RestClient::rhai_put)
-            .register_fn("post_form", RestClient::rhai_post_form)
-            .register_fn("http_post_form", RestClient::rhai_post_form)
-            .register_fn("delete_with_body", RestClient::rhai_delete_with_body)
-            .register_fn("http_delete_with_body", RestClient::rhai_delete_with_body);
+        http_rhai_register(&mut script.engine);
         script
             .engine
             .register_type_with_name::<Argon>("Argon")

@@ -72,8 +72,6 @@ mod metrics;
 pub use metrics::Metrics;
 
 mod handlebarshandler;
-pub mod hasheshandlers;
-mod httphandler;
 mod k8shandlers;
 mod passwordhandler;
 mod rhaihandler;

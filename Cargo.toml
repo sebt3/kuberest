@@ -76,14 +76,10 @@ opentelemetry-otlp = { version = "0.26.0", optional = true }
 thiserror = "2.0.3"
 anyhow = "1.0.75"
 handlebars =  { version = "6.2.0", features = ["script_helper", "string_helpers"] }
-handlebars_misc_helpers = { version = "0.17.0", features = ["string", "json", "jsonnet", "regex", "uuid"] }
 rhai = { version = "1.20.0", features = ["sync", "serde"] }
-reqwest = { version = "0.12.4", features = ["rustls-tls"] }
-vynil-core = "0.6.1"
+vynil-core = "0.7.0"
 base64 = "0.22.1"
 rand = "0.8.5"
-argon2 = { version = "0.5.3", features = ["std"] }
-bcrypt = "0.16.0"
 serde_json_path = "0.7.1"
 
 [dev-dependencies]

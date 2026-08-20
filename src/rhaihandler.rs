@@ -1,162 +1,57 @@
 use crate::{
     Error::{self, *},
-    RhaiRes,
-    handlebarshandler::HandleBars,
-    hasheshandlers::Argon,
-    httphandler::RestClient,
+    handlebarshandler::{self, HandleBars},
     passwordhandler::Passwords,
-    rhai_err,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use rhai::{Dynamic, Engine, ImmutableString, Map, Module, Scope};
-use serde::Deserialize;
+use vynil_core::http::http_rhai_register;
 
-#[derive(Debug)]
-pub struct Script {
-    pub engine: Engine,
-    pub ctx: Scope<'static>,
+/// Wraps vynil_core's Rhai engine setup (log/json/yaml/base64/hashes/...), adding kuberest's
+/// own gen_password/gen_password_alphanum (weight-based, matching the public `password_generator`
+/// CRD field - vynil-core's `password` feature is deliberately left disabled to avoid a name
+/// collision with its own minimum-count based generator), HandleBars and RestClient.
+pub struct Script(pub vynil_core::engine::Script);
+
+impl std::ops::Deref for Script {
+    type Target = vynil_core::engine::Script;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Script {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 impl Script {
     #[must_use]
     pub fn new() -> Script {
-        let mut script = Script {
-            engine: Engine::new(),
-            ctx: Scope::new(),
-        };
-        script
+        let mut inner = vynil_core::engine::Script::new_bare(vec![]);
+        inner
             .engine
-            .register_fn("log_debug", |s: ImmutableString| tracing::debug!("{s}"))
-            .register_fn("log_info", |s: ImmutableString| tracing::info!("{s}"))
-            .register_fn("log_warn", |s: ImmutableString| tracing::warn!("{s}"))
-            .register_fn("log_error", |s: ImmutableString| tracing::error!("{s}"))
-            .register_fn("bcrypt_hash", |s: ImmutableString| {
-                crate::hasheshandlers::bcrypt_hash(s.to_string()).map_err(rhai_err)
-            })
             .register_fn("gen_password", |len: u32| -> String {
                 Passwords::new().generate(len, 6, 2, 2)
             })
             .register_fn("gen_password_alphanum", |len: u32| -> String {
                 Passwords::new().generate(len, 8, 2, 0)
-            })
-            .register_fn("get_env", |var: ImmutableString| -> String {
-                std::env::var(var.to_string()).unwrap_or("".into())
-            })
-            .register_fn("base64_decode", |val: ImmutableString| -> ImmutableString {
-                String::from_utf8(STANDARD.decode(val.to_string()).unwrap())
-                    .unwrap()
-                    .into()
-            })
-            .register_fn("base64_encode", |val: ImmutableString| -> ImmutableString {
-                STANDARD.encode(val.to_string()).into()
-            })
-            .register_fn("json_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
-                serde_json::to_string(&val)
-                    .map_err(|e| rhai_err(Error::SerializationError(e)))
-                    .map(|v| v.into())
-            })
-            .register_fn("json_encode_escape", |val: Dynamic| -> RhaiRes<ImmutableString> {
-                let str = serde_json::to_string(&val).map_err(|e| rhai_err(Error::SerializationError(e)))?;
-                Ok(format!("{:?}", str).into())
-            })
-            .register_fn("json_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_json::from_str(val.as_ref()).map_err(|e| rhai_err(Error::SerializationError(e)))
-            })
-            .register_fn("yaml_encode", |val: Dynamic| -> RhaiRes<ImmutableString> {
-                serde_yaml::to_string(&val)
-                    .map_err(|e| rhai_err(Error::YamlError(e)))
-                    .map(|v| v.into())
-            })
-            .register_fn("yaml_encode", |val: Map| -> RhaiRes<ImmutableString> {
-                serde_yaml::to_string(&val)
-                    .map_err(|e| rhai_err(Error::YamlError(e)))
-                    .map(|v| v.into())
-            })
-            .register_fn("yaml_decode", |val: ImmutableString| -> RhaiRes<Dynamic> {
-                serde_yaml::from_str(val.as_ref()).map_err(|e| rhai_err(Error::YamlError(e)))
-            })
-            .register_fn(
-                "yaml_decode_multi",
-                |val: ImmutableString| -> RhaiRes<Vec<Dynamic>> {
-                    let mut res = Vec::new();
-                    if val.len() > 5 {
-                        // non-empty string only
-                        for document in serde_yaml::Deserializer::from_str(val.as_ref()) {
-                            let doc =
-                                Dynamic::deserialize(document).map_err(|e| rhai_err(Error::YamlError(e)))?;
-                            res.push(doc);
-                        }
-                    }
-                    Ok(res)
-                },
-            );
-        script
+            });
+        inner
             .engine
             .register_type_with_name::<HandleBars>("HandleBars")
-            .register_fn("new_hbs", HandleBars::new)
+            .register_fn("new_hbs", handlebarshandler::new_hbs)
             .register_fn("register_template", HandleBars::rhai_register_template)
             .register_fn("render_from", HandleBars::rhai_render);
-        script
-            .engine
-            .register_type_with_name::<RestClient>("RestClient")
-            .register_fn("new_client", RestClient::new)
-            .register_fn("headers_reset", RestClient::headers_reset_rhai)
-            .register_fn("set_baseurl", RestClient::baseurl_rhai)
-            .register_fn("set_server_ca", RestClient::set_server_ca)
-            .register_fn("set_mtls_cert_key", RestClient::set_mtls)
-            .register_fn("add_header", RestClient::add_header_rhai)
-            .register_fn("add_header_json", RestClient::add_header_json)
-            .register_fn("add_header_bearer", RestClient::add_header_bearer)
-            .register_fn("add_header_basic", RestClient::add_header_basic)
-            .register_fn("head", RestClient::rhai_head)
-            .register_fn("get", RestClient::rhai_get)
-            .register_fn("delete", RestClient::rhai_delete)
-            .register_fn("patch", RestClient::rhai_patch)
-            .register_fn("post", RestClient::rhai_post)
-            .register_fn("put", RestClient::rhai_put)
-            .register_fn("http_get", RestClient::rhai_get)
-            .register_fn("http_delete", RestClient::rhai_delete)
-            .register_fn("http_patch", RestClient::rhai_patch)
-            .register_fn("http_post", RestClient::rhai_post)
-            .register_fn("http_put", RestClient::rhai_put)
-            .register_fn("post_form", RestClient::rhai_post_form)
-            .register_fn("http_post_form", RestClient::rhai_post_form)
-            .register_fn("delete_with_body", RestClient::rhai_delete_with_body)
-            .register_fn("http_delete_with_body", RestClient::rhai_delete_with_body);
-        script
-            .engine
-            .register_type_with_name::<Argon>("Argon")
-            .register_fn("new_argon", Argon::new)
-            .register_fn("hash", Argon::rhai_hash);
-        script.add_code("fn assert(cond, mess) {if (!cond){throw mess}}");
-        script
-    }
-
-    pub fn add_code(&mut self, code: &str) {
-        match self.engine.compile(code) {
-            Ok(ast) => {
-                match Module::eval_ast_as_new(self.ctx.clone(), &ast, &self.engine) {
-                    Ok(module) => {
-                        self.engine.register_global_module(module.into());
-                    }
-                    Err(e) => {
-                        tracing::error!("Parsing {code} failed with: {e:}");
-                    }
-                };
-            }
-            Err(e) => {
-                tracing::error!("Loading {code} failed with: {e:}")
-            }
-        };
-    }
-
-    pub fn set_dynamic(&mut self, name: &str, val: &serde_json::Value) {
-        let value: Dynamic = serde_json::from_str(&serde_json::to_string(&val).unwrap()).unwrap();
-        self.ctx.set_or_push(name, value);
+        http_rhai_register(&mut inner.engine);
+        Script(inner)
     }
 
     pub fn eval(&mut self, script: &str) -> Result<serde_json::Value, Error> {
-        match self.engine.eval_with_scope::<rhai::Map>(&mut self.ctx, script) {
+        match self
+            .0
+            .engine
+            .eval_with_scope::<rhai::Map>(&mut self.0.ctx, script)
+        {
             Ok(v) => {
                 let value: serde_json::Value =
                     serde_json::from_str(&serde_json::to_string(&v).unwrap()).unwrap();

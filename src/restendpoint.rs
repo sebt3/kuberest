@@ -1,7 +1,5 @@
 use crate::{
-    Error, Metrics, Result, create,
-    handlebarshandler::HandleBars,
-    httphandler::{CreateMethod, DeleteMethod, ReadMethod, RestClient, UpdateMethod},
+    Error, Metrics, Result, create, handlebarshandler,
     k8shandlers::{ConfigMapHandler, SecretHandler},
     passwordhandler::Passwords,
     rhaihandler::Script,
@@ -28,6 +26,7 @@ use serde_json_path::JsonPath;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{runtime::Handle, sync::RwLock, time::Duration};
 use tracing::*;
+use vynil_core::http::{CreateMethod, DeleteMethod, ReadMethod, RestClient, UpdateMethod};
 
 pub static RESTPATH_FINALIZER: &str = "restendpoints.kuberest.solidite.fr";
 pub fn get_client_name() -> String {
@@ -488,12 +487,15 @@ impl OwnedRestPoint {
     status = "RestEndPointStatus",
     shortname = "rep"
 )]
+#[kube(doc = "Custom resource representing a RestEndPoint for kuberest")]
 #[kube(
-    doc = "Custom resource representing a RestEndPoint for kuberest",
-    printcolumn = r#"
-    {"name":"baseurl",   "type":"string", "description":"Base URL", "jsonPath":".spec.client.baseurl"},
-    {"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"},
-    {"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
+    printcolumn = r#"{"name":"baseurl", "type":"string", "description":"Base URL", "jsonPath":".spec.client.baseurl"}"#
+)]
+#[kube(
+    printcolumn = r#"{"name":"last_updated", "type":"date", "description":"Last update date", "format": "date-time", "jsonPath":".status.conditions[?(@.type == 'Ready')].lastTransitionTime"}"#
+)]
+#[kube(
+    printcolumn = r#"{"name":"errors", "type":"string", "description":"Errors", "jsonPath":".status.conditions[?(@.status == 'False')].message"}"#
 )]
 #[serde(rename_all = "camelCase")]
 pub struct RestEndPointSpec {
@@ -738,7 +740,7 @@ impl RestEndPoint {
         let restendpoints: Api<RestEndPoint> = Api::namespaced(client.clone(), &ns);
         let mut conditions: Vec<ApplicationCondition> = Vec::new();
         let mut values = serde_json::json!({"input":{},"pre":{},"read":{},"write":{},"post":{}});
-        let mut hbs = HandleBars::new();
+        let mut hbs = handlebarshandler::new_hbs();
         if let Some(templates) = self.spec.templates.clone() {
             for item in templates {
                 hbs.register_template(&item.name, &item.template)
@@ -1308,15 +1310,16 @@ impl RestEndPoint {
                                         update_path.as_str(),
                                         &update_key,
                                         &update_vals,
+                                        false,
                                     )
                                     .unwrap_or_else(|e| {
-                                        giveup = if let Error::MethodFailed(_, code, _) = e {
+                                        giveup = if let vynil_core::Error::MethodFailed(_, code, _) = e {
                                             code == 404
                                         } else {
                                             false
                                         };
                                         match e {
-                                            Error::JsonError(_) => {
+                                            vynil_core::Error::JsonError(_) => {
                                                 if item.read_path.is_none() {
                                                     conditions.push(ApplicationCondition::write_failed(
                                                         &format!(
@@ -1411,7 +1414,7 @@ impl RestEndPoint {
                                 )
                                 .unwrap_or_else(|e| {
                                     match e {
-                                        Error::JsonError(_) => {
+                                        vynil_core::Error::JsonError(_) => {
                                             if item.read_path.is_none() {
                                                 conditions.push(ApplicationCondition::write_failed(
                                                     &format!(
@@ -1529,7 +1532,7 @@ impl RestEndPoint {
                         rest.obj_delete(DeleteMethod::Delete, &old.path, &old.key)
                     };
                     delete_result.unwrap_or_else(|e| {
-                        let giveup = if let Error::MethodFailed(_, code, _) = e {
+                        let giveup = if let vynil_core::Error::MethodFailed(_, code, _) = e {
                             code == 404
                         } else {
                             false
@@ -1982,7 +1985,7 @@ impl RestEndPoint {
         let restendpoints: Api<RestEndPoint> = Api::namespaced(client.clone(), &ns);
         let mut conditions: Vec<ApplicationCondition> = Vec::new();
         let mut values = serde_json::json!({"input":{},"pre":{}});
-        let mut hbs = HandleBars::new();
+        let mut hbs = handlebarshandler::new_hbs();
         if let Some(templates) = self.spec.templates.clone() {
             for item in templates {
                 hbs.register_template(&item.name, &item.template)
@@ -2364,7 +2367,7 @@ impl RestEndPoint {
                         rest.obj_delete(DeleteMethod::Delete, &obj.path, &obj.key)
                     };
                     delete_result.unwrap_or_else(|e| {
-                        let giveup = if let Error::MethodFailed(_, code, _) = e {
+                        let giveup = if let vynil_core::Error::MethodFailed(_, code, _) = e {
                             code == 404
                         } else {
                             false

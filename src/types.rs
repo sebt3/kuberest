@@ -1,4 +1,4 @@
-use crate::httphandler::{CreateMethod, DeleteMethod, ReadMethod, UpdateMethod};
+use vynil_core::http::{CreateMethod, DeleteMethod, ReadMethod, UpdateMethod};
 use chrono::{DateTime, Utc};
 use kube::CustomResource;
 use schemars::JsonSchema;

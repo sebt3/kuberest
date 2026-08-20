@@ -16,31 +16,14 @@ pub enum Error {
     // so boxing this error to break cycles
     FinalizerError(#[from] Box<kube::runtime::finalizer::Error<Error>>),
 
-    #[error("Registering template failed with error: {0}")]
-    HbsTemplateError(#[from] handlebars::TemplateError),
-    #[error("Renderer error: {0}")]
-    HbsRenderError(#[from] handlebars::RenderError),
-
     #[error("Rhai script error: {0}")]
     RhaiError(#[from] Box<rhai::EvalAltResult>),
-
-    #[error("Reqwest error: {0}")]
-    ReqwestError(#[from] reqwest::Error),
 
     #[error("Json decoding error: {0}")]
     JsonError(#[source] serde_json::Error),
 
     #[error("{0} query failed: {1}")]
     MethodFailed(String, u16, String),
-
-    #[error("Argon2 password_hash error {0}")]
-    Argon2hash(#[from] argon2::password_hash::Error),
-
-    #[error("Bcrypt hash error {0}")]
-    BcryptError(#[from] bcrypt::BcryptError),
-
-    #[error("Unsupported method")]
-    UnsupportedMethod,
 
     #[error("TeardownIncomplete")]
     TeardownIncomplete,
@@ -72,8 +55,6 @@ mod metrics;
 pub use metrics::Metrics;
 
 mod handlebarshandler;
-pub mod hasheshandlers;
-mod httphandler;
 mod k8shandlers;
 mod passwordhandler;
 mod rhaihandler;

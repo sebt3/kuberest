@@ -4008,9 +4008,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vynil-core"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "394da741f00c62c3a9a54c24ed7cb622e0fef02c684207f7e796a9f4dfc3a06b"
+checksum = "0d92a4b9c83f59ae62f35c707434997a73526d3449845007993097c00e0768fc"
 dependencies = [
  "actix-web",
  "argon2",
